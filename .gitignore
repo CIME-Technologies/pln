@@ -1,0 +1,6 @@
+node_modules/
+out/
+.preview/
+*.vsix
+.DS_Store
+*.md

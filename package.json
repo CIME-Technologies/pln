@@ -1,0 +1,61 @@
+{
+  "name": "pln-plan",
+  "displayName": "Plan (.pln)",
+  "description": "Project list editor for .pln plan files",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "pln",
+        "aliases": [
+          "Plan",
+          "pln"
+        ],
+        "extensions": [
+          ".pln"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "pln.planEditor",
+        "displayName": "Plan",
+        "selector": [
+          {
+            "filenamePattern": "*.pln"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "pln.openAsText",
+        "title": "Plan: Reopen as Text Editor"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "preview": "node scripts/preview.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}
