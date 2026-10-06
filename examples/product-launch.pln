@@ -3,27 +3,23 @@
 ## Research
 
 - [x] Define target audience
-- [x] Review competitive landscape
-- [-] Hello
+- [x] Interview five design partners
+- [-] Review competitive landscape
 
 ## Design
 
 - [x] Map information architecture
-- [ ] Hand off design tokens
+- [-] Hand off design tokens
+- [ ] Polish the empty states
 
 ## Build
 
-- [ ] Set up CI pipeline
+- [-] Set up CI pipeline
 - [ ] Implement onboarding flow
 - [ ] Integrate billing
-- [ ] Instrument analytics
 - [ ] Run load tests
 
 ## Launch
 
-- [ ] Draft release notes
-- [ ] Update documentation
-- [ ] Prepare support playbook
-- [ ] Schedule announcement
-
-## hello
+- [ ] Draft the announcement post
+- [ ] Brief the support team

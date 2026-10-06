@@ -1,61 +1,48 @@
-/* Dark by default, light when the host theme is light. */
+/* Surfaces and text follow the host theme; only status carries its own colour. */
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 
-  --bg: #08090a;
-  --bg-raised: #0e0f11;
-  --bg-hover: rgba(255, 255, 255, 0.04);
-  --bg-active: rgba(255, 255, 255, 0.07);
-  --bg-group: rgba(255, 255, 255, 0.026);
-  --bg-chip: rgba(255, 255, 255, 0.05);
+  --bg: var(--vscode-editor-background, #1f1f1f);
+  --bg-raised: var(--vscode-editorWidget-background, #202020);
+  --bg-hover: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.12));
+  --bg-active: color-mix(in srgb, var(--text) 10%, transparent);
+  --bg-group: color-mix(in srgb, var(--text) 4%, transparent);
+  --bg-chip: color-mix(in srgb, var(--text) 7%, transparent);
 
-  --border: #1c1d20;
-  --border-strong: #26272b;
+  --border: var(--vscode-panel-border, color-mix(in srgb, var(--text) 15%, transparent));
+  --border-strong: var(--vscode-widget-border, color-mix(in srgb, var(--text) 24%, transparent));
 
-  --text: #f7f8f8;
-  --text-2: #b7bbc2;
-  --text-3: #8a8f98;
-  --text-4: #62666d;
+  --text: var(--vscode-foreground, #cccccc);
+  --text-2: color-mix(in srgb, var(--text) 80%, transparent);
+  --text-3: var(--vscode-descriptionForeground, #9d9d9d);
+  --text-4: color-mix(in srgb, var(--text-3) 72%, transparent);
 
-  --accent: #5e6ad2;
-  --accent-soft: rgba(94, 106, 210, 0.16);
+  --accent: var(--vscode-focusBorder, #4a6b8a);
+  --selection: var(--vscode-editor-selectionBackground, #2f5878);
+  --danger: var(--vscode-errorForeground, #c76b63);
 
-  --todo: #6e7178;
-  --progress: #f2c94c;
-  --done: #5e6ad2;
+  --todo: var(--text-3);
+  --progress: #bb9450;
+  --done: #8088c6;
 
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
 
-  --radius: 6px;
-  --topbar-h: 44px;
   --row-h: 36px;
 
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  --mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
+body.vscode-dark {
+  color-scheme: dark;
+}
+
+/* Light themes need deeper status tones to stay legible on white. */
 body.vscode-light {
   color-scheme: light;
 
-  --bg: #ffffff;
-  --bg-raised: #fbfbfb;
-  --bg-hover: rgba(10, 10, 20, 0.035);
-  --bg-active: rgba(10, 10, 20, 0.06);
-  --bg-group: rgba(10, 10, 20, 0.022);
-  --bg-chip: rgba(10, 10, 20, 0.045);
-
-  --border: #ececed;
-  --border-strong: #e0e0e2;
-
-  --text: #16171a;
-  --text-2: #3c4149;
-  --text-3: #6f737b;
-  --text-4: #8a8f98;
-
-  --todo: #9b9fa6;
-
-  --shadow: 0 8px 24px rgba(16, 18, 32, 0.14), 0 2px 6px rgba(16, 18, 32, 0.08);
+  --progress: #8d6a1f;
+  --done: #5b63ab;
 }
 
 * {
@@ -82,7 +69,7 @@ body {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--selection);
 }
 
 ::-webkit-scrollbar {
@@ -118,64 +105,31 @@ button {
   border-radius: 4px;
 }
 
-/* ---------- Top bar ---------- */
+/* ---------- Hero ---------- */
 
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  height: var(--topbar-h);
+.hero {
+  padding: 26px 24px 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hero-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 16px;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: saturate(180%) blur(12px);
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
 }
 
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+.hero h1 {
+  margin: 0;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-3);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.25;
 }
 
-.crumb-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  border-radius: 5px;
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.crumb-icon svg {
-  width: 12px;
-  height: 12px;
-}
-
-.crumb-sep {
-  color: var(--text-4);
-  opacity: 0.7;
-}
-
-.crumb-current {
-  color: var(--text);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar-right {
+.progress {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -203,21 +157,6 @@ button {
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 240ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* ---------- Hero ---------- */
-
-.hero {
-  padding: 28px 24px 22px;
-  border-bottom: 1px solid var(--border);
-}
-
-.hero h1 {
-  margin: 0 0 14px;
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.022em;
-  line-height: 1.25;
 }
 
 .hero-meta {
@@ -266,51 +205,11 @@ button {
   background: var(--done);
 }
 
-/* ---------- List toolbar ---------- */
-
-.list-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  height: 38px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-3);
-  font-size: 12px;
-}
-
-.toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 5px;
-  color: var(--text-3);
-  font-size: 12px;
-  transition: background 100ms ease, color 100ms ease;
-}
-
-.toolbar-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.toolbar-btn svg {
-  width: 12px;
-  height: 12px;
-}
-
-/* ---------- Groups ---------- */
-
-.groups {
-  padding-bottom: 0;
-}
+/* ---------- Sections ---------- */
 
 .group-header {
   position: sticky;
-  top: var(--topbar-h);
+  top: 0;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -388,21 +287,6 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.group-ratio {
-  flex: 0 0 auto;
-  padding-right: 4px;
-  color: var(--text-4);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  opacity: 0;
-  transition: opacity 100ms ease;
-}
-
-.group-header:hover .group-ratio,
-.group.collapsed .group-ratio {
-  opacity: 1;
-}
-
 /* ---------- Icon buttons ---------- */
 
 .icon-btn {
@@ -452,7 +336,8 @@ button {
   align-items: center;
   gap: 10px;
   height: var(--row-h);
-  padding: 0 18px 0 24px;
+  /* Indented so the status glyph sits on the same axis as the section ring. */
+  padding: 0 18px 0 41px;
   border-bottom: 1px solid var(--border);
   transition: background 80ms ease;
 }
@@ -510,7 +395,6 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: text;
 }
 
 .row.done .row-title {
@@ -575,11 +459,11 @@ button {
 }
 
 .menu-item.danger {
-  color: #eb5757;
+  color: var(--danger);
 }
 
 .menu-item.danger:hover {
-  background: rgba(235, 87, 87, 0.12);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .menu-icon {

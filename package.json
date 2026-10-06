@@ -1,28 +1,29 @@
 {
   "name": "pln-plan",
   "displayName": "Plan (.pln)",
-  "description": "Project list editor for .pln plan files",
+  "description": "Visual project list editor for .pln plan files",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "emanuelaromano",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emanuelaromano/pln.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": [
-    "Other"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [
       {
         "id": "pln",
         "aliases": [
-          "Plan",
-          "pln"
+          "Plan"
         ],
         "extensions": [
           ".pln"
-        ],
-        "configuration": "./language-configuration.json"
+        ]
       }
     ],
     "customEditors": [
@@ -36,25 +37,17 @@
         ],
         "priority": "default"
       }
-    ],
-    "commands": [
-      {
-        "command": "pln.openAsText",
-        "title": "Plan: Reopen as Text Editor"
-      }
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "node esbuild.js",
-    "watch": "node esbuild.js --watch",
-    "preview": "node scripts/preview.js",
-    "package": "vsce package"
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "npm run compile -- --watch",
+    "check": "tsc --noEmit",
+    "test": "npm run compile && node --test test/plan.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^2.24.0",
     "esbuild": "^0.20.0",
     "typescript": "^5.3.3"
   }

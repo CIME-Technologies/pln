@@ -1,202 +1,142 @@
 (function () {
   const vscode = acquireVsCodeApi();
-
+  const $ = (id) => document.getElementById(id);
   const el = {
-    crumb: document.getElementById("crumb-title"),
-    title: document.getElementById("title"),
-    meta: document.getElementById("hero-meta"),
-    donutFill: document.getElementById("donut-fill"),
-    pct: document.getElementById("pct"),
-    toolbarLabel: document.getElementById("toolbar-label"),
-    collapseAll: document.getElementById("collapse-all"),
-    collapseAllLabel: document.getElementById("collapse-all-label"),
-    groups: document.getElementById("groups"),
-    empty: document.getElementById("empty"),
-    addSection: document.getElementById("add-section"),
+    title: $("title"),
+    meta: $("meta"),
+    donut: $("donut"),
+    pct: $("pct"),
+    sections: $("sections"),
+    empty: $("empty"),
+    addSection: $("add-section"),
   };
 
-  const STATUS_LABEL = {
-    todo: "Todo",
-    in_progress: "In Progress",
-    done: "Done",
-  };
-  const STATUS_ORDER = ["todo", "in_progress", "done"];
-
-  const DONUT_C = 2 * Math.PI * 7;
+  const LABEL = { todo: "Todo", in_progress: "In Progress", done: "Done" };
+  const ORDER = ["todo", "in_progress", "done"];
+  const DONUT = 2 * Math.PI * 7;
   const RING_R = 5.5;
-  const RING_C = 2 * Math.PI * RING_R;
+  const RING = 2 * Math.PI * RING_R;
 
   const collapsed = new Set((vscode.getState() || {}).collapsed || []);
-  let lastPlan = null;
-  let pendingFocus = null;
-  let openMenuEl = null;
+  const post = (m) => vscode.postMessage(m);
+  const persist = () => vscode.setState({ collapsed: [...collapsed] });
 
-  const post = (message) => vscode.postMessage(message);
-  const persist = () => vscode.setState({ collapsed: Array.from(collapsed) });
-  const groupKeyOf = (group) => group.key;
-
-  /**
-   * Collapse state is keyed by title rather than line, since any insert or
-   * delete shifts the line numbers of every group below it.
-   */
-  function assignGroupKeys(groups) {
-    const seen = new Map();
-    for (const group of groups) {
-      const nth = (seen.get(group.title) || 0) + 1;
-      seen.set(group.title, nth);
-      group.key = nth === 1 ? group.title : `${group.title}#${nth}`;
-    }
-  }
+  let plan = { title: "Plan", sections: [] };
+  let menu = null;
+  /** Row line to edit, or "lastSection", once the next render contains it. */
+  let focusAfterRender = null;
+  /** The open inline input, if any. Renders are deferred while it exists. */
+  let activeInput = null;
+  let queuedPlan = null;
 
   /* ---------- icons ---------- */
 
-  function svg(inner, viewBox) {
-    return `<svg viewBox="${viewBox || "0 0 14 14"}" aria-hidden="true">${inner}</svg>`;
-  }
+  const svg = (inner, box = "0 0 14 14") =>
+    `<svg viewBox="${box}" aria-hidden="true">${inner}</svg>`;
+
+  const OUTLINE = `<circle cx="7" cy="7" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>`;
 
   function statusIcon(status) {
     if (status === "done") {
-      return svg(`
-        <circle cx="7" cy="7" r="7" fill="currentColor"/>
+      return svg(`<circle cx="7" cy="7" r="7" fill="currentColor"/>
         <path d="M4 7.3l2.1 2.1L10.2 5" fill="none" stroke="#fff" stroke-width="1.6"
-              stroke-linecap="round" stroke-linejoin="round"/>
-      `);
+              stroke-linecap="round" stroke-linejoin="round"/>`);
     }
     if (status === "in_progress") {
-      return svg(`
-        <circle cx="7" cy="7" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>
-        <path d="M7 3.1A3.9 3.9 0 0 1 7 10.9Z" fill="currentColor"/>
-      `);
+      return svg(`${OUTLINE}<path d="M7 3.1A3.9 3.9 0 0 1 7 10.9Z" fill="currentColor"/>`);
     }
-    return svg(
-      `<circle cx="7" cy="7" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>`
-    );
+    return svg(OUTLINE);
   }
 
-  const ICON_PLUS = svg(
+  const PLUS = svg(
     `<path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`,
     "0 0 12 12"
   );
-  const ICON_DOTS = svg(
+  const DOTS = svg(
     `<circle cx="3" cy="6" r="1.1" fill="currentColor"/><circle cx="6" cy="6" r="1.1" fill="currentColor"/><circle cx="9" cy="6" r="1.1" fill="currentColor"/>`,
     "0 0 12 12"
   );
-  const ICON_CHECK = svg(
+  const CHECK = svg(
     `<path d="M2.5 6.2l2.4 2.4L9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
     "0 0 12 12"
   );
-  const ICON_RENAME = svg(
+  const PENCIL = svg(
     `<path d="M8.2 2.6l1.2 1.2-5 5-1.6.4.4-1.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>`,
     "0 0 12 12"
   );
-  const ICON_TRASH = svg(
+  const TRASH = svg(
     `<path d="M2.8 3.6h6.4M4.8 3.6V2.8h2.4v.8M3.6 3.6l.4 5.2h4l.4-5.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`,
     "0 0 12 12"
   );
 
-  /** Derive a team key: "Product Launch Plan" -> "PLP". */
-  function teamKey(title) {
-    const words = String(title || "")
-      .replace(/[^A-Za-z0-9]+/g, " ")
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-
-    if (words.length === 0) {
-      return "PLN";
-    }
-    if (words.length === 1) {
-      return words[0].slice(0, 3).toUpperCase().padEnd(3, "N");
-    }
-    return words
-      .filter((w) => !/^\d+$/.test(w))
-      .slice(0, 3)
-      .map((w) => w[0])
-      .join("")
-      .toUpperCase()
-      .padEnd(2, "N");
+  /** "Product Launch Plan" -> "PLP", "Roadmap" -> "ROA". */
+  function issuePrefix(title) {
+    const words = title.match(/[A-Za-z]+/g) || [];
+    const key =
+      words.length === 1 ? words[0].slice(0, 3) : words.map((w) => w[0]).join("").slice(0, 3);
+    return (key || "PLN").toUpperCase();
   }
 
   /* ---------- render ---------- */
 
-  function render(plan) {
-    lastPlan = plan;
-    assignGroupKeys(plan.groups);
+  function render() {
     closeMenu();
 
-    const { total, done, inProgress } = plan;
-    const todo = total - done - inProgress;
-    const ratio = total === 0 ? 0 : done / total;
+    const issues = plan.sections.flatMap((s) => s.issues);
+    const done = issues.filter((i) => i.status === "done").length;
+    const active = issues.filter((i) => i.status === "in_progress").length;
+    const ratio = issues.length ? done / issues.length : 0;
 
-    el.crumb.textContent = plan.title || "Plan";
-    el.title.textContent = plan.title || "Plan";
+    el.title.textContent = plan.title;
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
-    el.donutFill.setAttribute("stroke-dasharray", String(DONUT_C));
-    el.donutFill.setAttribute("stroke-dashoffset", String(DONUT_C * (1 - ratio)));
+    el.donut.setAttribute("stroke-dasharray", DONUT);
+    el.donut.setAttribute("stroke-dashoffset", DONUT * (1 - ratio));
+    el.meta.innerHTML =
+      chip("todo", issues.length - done - active) +
+      chip("in_progress", active) +
+      chip("done", done) +
+      `<span class="chip">${issues.length} ${issues.length === 1 ? "issue" : "issues"}</span>`;
 
-    el.meta.innerHTML = [
-      chip("todo", todo, "Todo"),
-      chip("in_progress", inProgress, "In Progress"),
-      chip("done", done, "Done"),
-      `<span class="chip">${total} ${total === 1 ? "issue" : "issues"}</span>`,
-    ].join("");
-
-    const key = teamKey(plan.title);
-    const groups = plan.groups;
-    pruneCollapsed(groups);
-
-    el.groups.innerHTML = "";
-    el.collapseAll.classList.toggle("hidden", groups.length === 0);
-    el.empty.classList.toggle("hidden", groups.length > 0);
-    el.toolbarLabel.textContent =
-      groups.length === 0
-        ? "No sections"
-        : `${groups.length} ${groups.length === 1 ? "section" : "sections"}`;
-
-    let counter = 0;
-    for (const group of groups) {
-      el.groups.appendChild(renderGroup(group, key, () => ++counter));
+    // Collapse state is keyed by title: any edit shifts the line numbers below it.
+    const seen = new Map();
+    const live = new Set();
+    for (const section of plan.sections) {
+      const nth = (seen.get(section.title) || 0) + 1;
+      seen.set(section.title, nth);
+      section.key = nth === 1 ? section.title : `${section.title}#${nth}`;
+      live.add(section.key);
     }
 
-    syncCollapseAllLabel();
-    applyPendingFocus();
-  }
-
-  /** Forget sections that no longer exist so a re-created name starts expanded. */
-  function pruneCollapsed(groups) {
-    const live = new Set(groups.map((g) => g.key));
-    let changed = false;
-    for (const key of collapsed) {
-      if (!live.has(key)) {
-        collapsed.delete(key);
-        changed = true;
-      }
-    }
-    if (changed) {
+    // Forget deleted sections so a section that reuses the name starts expanded.
+    const stale = [...collapsed].filter((key) => !live.has(key));
+    if (stale.length) {
+      stale.forEach((key) => collapsed.delete(key));
       persist();
     }
+
+    const prefix = issuePrefix(plan.title);
+    let n = 0;
+    el.sections.innerHTML = "";
+    el.empty.classList.toggle("hidden", plan.sections.length > 0);
+    for (const section of plan.sections) {
+      el.sections.appendChild(renderSection(section, () => `${prefix}-${++n}`));
+    }
+
   }
 
-  function chip(status, count, label) {
-    return `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${label}</span>`;
-  }
+  const chip = (status, count) =>
+    `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${LABEL[status]}</span>`;
 
-  function renderGroup(group, key, nextIndex) {
-    const gKey = groupKeyOf(group);
-    const isCollapsed = collapsed.has(gKey);
+  function renderSection(section, nextId) {
+    const node = document.createElement("section");
+    const isCollapsed = collapsed.has(section.key);
+    node.className = "group" + (isCollapsed ? " collapsed" : "");
 
-    const section = document.createElement("section");
-    section.className = "group" + (isCollapsed ? " collapsed" : "");
-
-    const groupDone = group.issues.filter((i) => i.status === "done").length;
-    const pct = group.issues.length === 0 ? 0 : groupDone / group.issues.length;
-
-    const header = document.createElement("div");
-    header.className = "group-header";
+    const done = section.issues.filter((i) => i.status === "done").length;
+    const ratio = section.issues.length ? done / section.issues.length : 0;
 
     const main = document.createElement("div");
     main.className = "group-main";
-    main.dataset.line = String(group.line);
     main.setAttribute("role", "button");
     main.setAttribute("tabindex", "0");
     main.setAttribute("aria-expanded", String(!isCollapsed));
@@ -208,29 +148,22 @@
       <svg class="group-donut" viewBox="0 0 14 14" aria-hidden="true">
         <circle class="ring-track" cx="7" cy="7" r="${RING_R}"/>
         <circle class="ring-fill" cx="7" cy="7" r="${RING_R}"
-                stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * (1 - pct)}"/>
+                stroke-dasharray="${RING}" stroke-dashoffset="${RING * (1 - ratio)}"/>
       </svg>
       <span class="group-name"></span>
-      <span class="group-count">${group.issues.length}</span>
-    `;
-    main.querySelector(".group-name").textContent = group.title;
+      <span class="group-count">${section.issues.length}</span>`;
+    main.querySelector(".group-name").textContent = section.title;
 
     const toggle = () => {
       if (main.querySelector("input")) {
         return;
       }
-      const nowCollapsed = !collapsed.has(gKey);
-      if (nowCollapsed) {
-        collapsed.add(gKey);
-      } else {
-        collapsed.delete(gKey);
-      }
-      section.classList.toggle("collapsed", nowCollapsed);
-      main.setAttribute("aria-expanded", String(!nowCollapsed));
+      const next = !collapsed.has(section.key);
+      next ? collapsed.add(section.key) : collapsed.delete(section.key);
+      node.classList.toggle("collapsed", next);
+      main.setAttribute("aria-expanded", String(!next));
       persist();
-      syncCollapseAllLabel();
     };
-
     main.addEventListener("click", toggle);
     main.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -239,146 +172,148 @@
       }
     });
 
-    const ratio = document.createElement("span");
-    ratio.className = "group-ratio";
-    ratio.textContent = `${groupDone}/${group.issues.length}`;
-
-    const addBtn = iconButton(ICON_PLUS, "Add issue", (e) => {
-      e.stopPropagation();
-      collapsed.delete(gKey);
+    const add = iconButton(PLUS, "Add issue", () => {
+      collapsed.delete(section.key);
       persist();
-      post({ type: "addIssue", groupLine: group.line });
+      const last = section.issues[section.issues.length - 1];
+      const after = last ? last.line : section.line;
+      focusAfterRender = after + 1;
+      post({ t: "addIssue", after });
     });
 
-    const menuBtn = iconButton(ICON_DOTS, "Section options", (e) => {
-      e.stopPropagation();
-      openMenu(menuBtn, [
-        {
-          label: "Rename section",
-          icon: ICON_RENAME,
-          run: () => editGroup(main, group),
-        },
+    const more = iconButton(DOTS, "Section options", () =>
+      openMenu(more, [
+        { label: "Rename section", icon: PENCIL, run: () => editSection(main, section) },
         {
           label: "Delete section",
-          icon: ICON_TRASH,
+          icon: TRASH,
           danger: true,
-          run: () => post({ type: "deleteGroup", line: group.line }),
+          run: () => post({ t: "deleteSection", line: section.line }),
         },
-      ]);
-    });
+      ])
+    );
 
-    header.append(main, ratio, addBtn, menuBtn);
+    const header = document.createElement("div");
+    header.className = "group-header";
+    header.append(main, add, more);
 
     const list = document.createElement("ul");
     list.className = "rows";
-    for (const issue of group.issues) {
-      list.appendChild(renderRow(issue, key, nextIndex()));
-    }
+    section.issues.forEach((issue) => list.appendChild(renderRow(issue, nextId())));
 
-    section.append(header, list);
-    return section;
+    node.append(header, list);
+    return node;
   }
 
-  function renderRow(issue, key, index) {
-    const li = document.createElement("li");
-    li.className = "row" + (issue.status === "done" ? " done" : "");
-    li.dataset.line = String(issue.line);
+  function renderRow(issue, id) {
+    const row = document.createElement("li");
+    row.className = "row" + (issue.status === "done" ? " done" : "");
+    row.dataset.line = issue.line;
 
     const status = document.createElement("button");
     status.type = "button";
     status.className = `status ${issue.status}`;
     status.innerHTML = statusIcon(issue.status);
-    status.title = `${STATUS_LABEL[issue.status]} — click to change`;
-    status.setAttribute("aria-label", `Status ${STATUS_LABEL[issue.status]}. Change status.`);
-    status.addEventListener("click", () => post({ type: "toggleStatus", line: issue.line }));
+    status.title = `${LABEL[issue.status]} — click to change`;
+    status.addEventListener("click", () =>
+      setStatus(issue, ORDER[(ORDER.indexOf(issue.status) + 1) % ORDER.length])
+    );
 
-    const id = document.createElement("span");
-    id.className = "row-id";
-    id.textContent = `${key}-${index}`;
+    const label = document.createElement("span");
+    label.className = "row-id";
+    label.textContent = id;
 
     const title = document.createElement("span");
     title.className = "row-title" + (issue.text ? "" : " placeholder");
     title.textContent = issue.text || "Untitled";
-    title.addEventListener("click", () => editIssue(li, issue));
 
-    const menuBtn = iconButton(ICON_DOTS, "Issue options", (e) => {
-      e.stopPropagation();
-      openMenu(menuBtn, [
-        ...STATUS_ORDER.map((s) => ({
-          label: STATUS_LABEL[s],
+    const more = iconButton(DOTS, "Issue options", () =>
+      openMenu(more, [
+        ...ORDER.map((s) => ({
+          label: LABEL[s],
           icon: statusIcon(s),
           iconClass: `status-glyph ${s}`,
           selected: s === issue.status,
-          run: () => post({ type: "toggleStatus", line: issue.line, status: s }),
+          run: () => setStatus(issue, s),
         })),
         { separator: true },
-        { label: "Rename", icon: ICON_RENAME, run: () => editIssue(li, issue) },
+        { label: "Rename", icon: PENCIL, run: () => editIssue(row, issue) },
         {
           label: "Delete",
-          icon: ICON_TRASH,
+          icon: TRASH,
           danger: true,
-          run: () => post({ type: "deleteIssue", line: issue.line }),
+          run: () => post({ t: "deleteIssue", line: issue.line }),
         },
-      ]);
+      ])
+    );
+
+    row.append(status, label, title, more);
+    return row;
+  }
+
+  function iconButton(icon, label, run) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn";
+    button.innerHTML = icon;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      run();
     });
-
-    li.append(status, id, title, menuBtn);
-    return li;
+    return button;
   }
 
-  function iconButton(icon, label, onClick) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "icon-btn";
-    btn.innerHTML = icon;
-    btn.title = label;
-    btn.setAttribute("aria-label", label);
-    btn.addEventListener("click", onClick);
-    return btn;
-  }
+  /* ---------- editing ---------- */
 
-  /* ---------- inline editing ---------- */
+  /**
+   * Paint the new status straight away instead of waiting out the provider's
+   * debounce. The document stays authoritative: its next push overwrites this.
+   */
+  function setStatus(issue, status) {
+    issue.status = status;
+    render();
+    post({ t: "status", line: issue.line, status });
+  }
 
   function editIssue(row, issue) {
-    beginEdit(row.querySelector(".row-title"), issue.text, (value, viaEnter) => {
+    edit(row.querySelector(".row-title"), issue.text, (value, viaEnter) => {
       if (!value) {
-        post({ type: "deleteIssue", line: issue.line });
+        post({ t: "deleteIssue", line: issue.line });
         return true;
       }
-      let changed = false;
-      if (value !== issue.text) {
-        post({ type: "updateIssue", line: issue.line, text: value });
-        changed = true;
+      if (value === issue.text && !viaEnter) {
+        return false;
       }
       if (viaEnter) {
-        post({ type: "addIssueAfter", line: issue.line });
-        changed = true;
+        focusAfterRender = issue.line + 1;
       }
-      return changed;
+      post({ t: "text", line: issue.line, text: value, addAfter: viaEnter });
+      return true;
     });
   }
 
-  function editGroup(main, group) {
-    beginEdit(main.querySelector(".group-name"), group.title, (value) => {
-      if (!value || value === group.title) {
+  function editSection(main, section) {
+    edit(main.querySelector(".group-name"), section.title, (value) => {
+      if (!value || value === section.title) {
         return false;
       }
-      // Carry collapse state across the rename, since the key is the title.
-      if (collapsed.delete(group.key)) {
+      if (collapsed.delete(section.key)) {
         collapsed.add(value);
         persist();
       }
-      post({ type: "renameGroup", line: group.line, title: value });
+      post({ t: "renameSection", line: section.line, title: value });
       return true;
     });
   }
 
   /**
-   * Swaps a label for an input. `commit` returns true when it triggered a
-   * document edit, meaning the re-render will restore the label for us.
+   * Swap a label for an input. `commit` reports whether it changed the
+   * document; if it did, the resulting update redraws the label for us.
    */
-  function beginEdit(label, initial, commit) {
-    if (!label || label.tagName === "INPUT") {
+  function edit(label, initial, commit) {
+    if (!label) {
       return;
     }
     closeMenu();
@@ -389,9 +324,10 @@
     input.value = initial;
     input.spellcheck = false;
     label.replaceWith(input);
+    input.scrollIntoView({ block: "nearest" });
     input.focus();
     input.select();
-    input.scrollIntoView({ block: "nearest" });
+    activeInput = input;
 
     let settled = false;
     const finish = (save, viaEnter) => {
@@ -399,83 +335,71 @@
         return;
       }
       settled = true;
-      const edited = save ? commit(input.value.trim(), viaEnter) : false;
-      if (!edited && lastPlan) {
-        render(lastPlan);
+      activeInput = null;
+
+      // A commit changes the document, and that update redraws the label.
+      if (save && commit(input.value.trim(), viaEnter)) {
+        queuedPlan = null;
+        return;
       }
+      if (queuedPlan) {
+        plan = queuedPlan;
+        queuedPlan = null;
+      }
+      render();
     };
 
     input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("blur", () => finish(true, false));
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" || e.key === "Escape") {
         e.preventDefault();
-        finish(true, true);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        finish(false, false);
+        finish(e.key === "Enter", e.key === "Enter");
       }
     });
-    input.addEventListener("blur", () => finish(true, false));
   }
 
-  function applyPendingFocus() {
-    if (!pendingFocus || !lastPlan) {
+  function applyFocus() {
+    if (focusAfterRender === null) {
       return;
     }
-    // The focus message arrives before the debounced re-render, so keep the
-    // request queued until the target row actually exists.
-    const { kind, line } = pendingFocus;
-
-    if (kind === "issue") {
-      const row = el.groups.querySelector(`.row[data-line="${line}"]`);
-      const issue = findIssue(line);
-      if (row && issue) {
-        pendingFocus = null;
-        editIssue(row, issue);
+    if (focusAfterRender === "lastSection") {
+      const last = el.sections.lastElementChild;
+      if (last) {
+        editSection(last.querySelector(".group-main"), plan.sections[plan.sections.length - 1]);
       }
       return;
     }
-
-    const main = el.groups.querySelector(`.group-main[data-line="${line}"]`);
-    const group = lastPlan.groups.find((g) => g.line === line);
-    if (main && group) {
-      pendingFocus = null;
-      editGroup(main, group);
+    const row = el.sections.querySelector(`.row[data-line="${focusAfterRender}"]`);
+    const issue = plan.sections
+      .flatMap((s) => s.issues)
+      .find((i) => i.line === focusAfterRender);
+    if (row && issue) {
+      editIssue(row, issue);
     }
   }
 
-  function findIssue(line) {
-    for (const group of lastPlan.groups) {
-      for (const issue of group.issues) {
-        if (issue.line === line) {
-          return issue;
-        }
-      }
-    }
-    return undefined;
-  }
-
-  /* ---------- context menu ---------- */
+  /* ---------- menu ---------- */
 
   function openMenu(anchor, items) {
     closeMenu();
-
-    const menu = document.createElement("div");
+    menu = document.createElement("div");
     menu.className = "menu";
 
     for (const item of items) {
       if (item.separator) {
-        menu.appendChild(Object.assign(document.createElement("div"), { className: "menu-sep" }));
+        const separator = document.createElement("div");
+        separator.className = "menu-sep";
+        menu.appendChild(separator);
         continue;
       }
       const button = document.createElement("button");
       button.type = "button";
       button.className = "menu-item" + (item.danger ? " danger" : "");
       button.innerHTML = `
-        <span class="menu-icon ${item.iconClass || ""}">${item.icon || ""}</span>
+        <span class="menu-icon ${item.iconClass || ""}">${item.icon}</span>
         <span class="menu-label"></span>
-        <span class="menu-check">${item.selected ? ICON_CHECK : ""}</span>
-      `;
+        <span class="menu-check">${item.selected ? CHECK : ""}</span>`;
       button.querySelector(".menu-label").textContent = item.label;
       button.addEventListener("click", () => {
         closeMenu();
@@ -485,81 +409,46 @@
     }
 
     document.body.appendChild(menu);
-
-    const rect = anchor.getBoundingClientRect();
-    const top = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
-    const left = Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8);
-    menu.style.top = `${Math.max(8, top)}px`;
-    menu.style.left = `${Math.max(8, left)}px`;
-
-    openMenuEl = menu;
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const box = anchor.getBoundingClientRect();
+    menu.style.top = `${Math.max(8, Math.min(box.bottom + 4, innerHeight - menu.offsetHeight - 8))}px`;
+    menu.style.left = `${Math.max(8, Math.min(box.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+    setTimeout(() => document.addEventListener("mousedown", onOutsideClick, true));
   }
 
-  function onOutside(e) {
-    if (openMenuEl && !openMenuEl.contains(e.target)) {
+  function onOutsideClick(e) {
+    if (!menu.contains(e.target)) {
       closeMenu();
     }
   }
 
   function closeMenu() {
-    if (!openMenuEl) {
-      return;
+    if (menu) {
+      document.removeEventListener("mousedown", onOutsideClick, true);
+      menu.remove();
+      menu = null;
     }
-    document.removeEventListener("mousedown", onOutside, true);
-    openMenuEl.remove();
-    openMenuEl = null;
   }
 
-  /* ---------- toolbar ---------- */
+  /* ---------- wiring ---------- */
 
-  function syncCollapseAllLabel() {
-    if (!lastPlan) {
-      return;
-    }
-    const groups = lastPlan.groups;
-    const allCollapsed =
-      groups.length > 0 && groups.every((g) => collapsed.has(groupKeyOf(g)));
-    el.collapseAllLabel.textContent = allCollapsed ? "Expand all" : "Collapse all";
-  }
-
-  el.collapseAll.addEventListener("click", () => {
-    if (!lastPlan) {
-      return;
-    }
-    const groups = lastPlan.groups;
-    const allCollapsed = groups.every((g) => collapsed.has(groupKeyOf(g)));
-    for (const group of groups) {
-      if (allCollapsed) {
-        collapsed.delete(groupKeyOf(group));
-      } else {
-        collapsed.add(groupKeyOf(group));
-      }
-    }
-    persist();
-    render(lastPlan);
+  el.addSection.addEventListener("click", () => {
+    focusAfterRender = "lastSection";
+    post({ t: "addSection" });
   });
 
-  el.addSection.addEventListener("click", () => post({ type: "addGroup" }));
+  document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      closeMenu();
-    }
-  });
-
-  window.addEventListener("message", (event) => {
-    const message = event.data;
-    if (!message) {
+  window.addEventListener("message", (e) => {
+    // Redrawing would destroy an open input along with its focus and selection.
+    if (activeInput) {
+      queuedPlan = e.data;
       return;
     }
-    if (message.type === "update" && message.plan) {
-      render(message.plan);
-    } else if (message.type === "focus") {
-      pendingFocus = { kind: message.kind, line: message.line };
-      applyPendingFocus();
-    }
+    plan = e.data;
+    render();
+    applyFocus(); // only a document update can contain the row we asked to edit
+    focusAfterRender = null;
   });
 
-  post({ type: "ready" });
+  post({ t: "ready" });
 })();
