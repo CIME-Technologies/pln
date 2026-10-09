@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "emanuelaromano",
   "license": "MIT",
-  "icon": "icon.png",
+  "icon": "docs/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/emanuelaromano/pln.git"

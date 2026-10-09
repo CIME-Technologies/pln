@@ -2,7 +2,7 @@
 src/**
 test/**
 examples/**
-docs/**
+docs/screenshot.png
 .vscode/**
 tsconfig.json
 package-lock.json
