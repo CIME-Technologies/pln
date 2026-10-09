@@ -175,9 +175,18 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
 
   /**
    * Apply a webview message as a {@link vscode.WorkspaceEdit}.
+   * Undo/redo run VS Code's native commands so the text-document stack is used.
    * @returns `false` if the message was rejected (webview should resync).
    */
   private async edit(doc: vscode.TextDocument, m: any): Promise<boolean> {
+    if (m.t === "undo") {
+      await vscode.commands.executeCommand("undo");
+      return true;
+    }
+    if (m.t === "redo") {
+      await vscode.commands.executeCommand("redo");
+      return true;
+    }
     if (m.t === "deleteTask") {
       return this.deleteTask(doc, m.line);
     }

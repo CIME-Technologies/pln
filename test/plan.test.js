@@ -70,6 +70,9 @@ class Doc {
 let warning = { reply: "Delete", calls: [] };
 let provider;
 let docListener;
+/** Snapshots of document text before each applyEdit (native undo stand-in). */
+let undoStack = [];
+let redoStack = [];
 
 const vscode = {
   Position,
@@ -78,6 +81,8 @@ const vscode = {
   Uri: { file: (p) => ({ p }), joinPath: (u, ...s) => ({ p: [u.p, ...s].join("/") }) },
   workspace: {
     applyEdit: async (edit) => {
+      undoStack.push(activeDoc.text);
+      redoStack = [];
       activeDoc.apply(edit);
       docListener?.({ document: activeDoc });
       return true;
@@ -85,6 +90,27 @@ const vscode = {
     onDidChangeTextDocument: (fn) => {
       docListener = fn;
       return { dispose() {} };
+    },
+  },
+  commands: {
+    executeCommand: async (cmd) => {
+      if (cmd === "undo") {
+        if (!undoStack.length) {
+          return;
+        }
+        redoStack.push(activeDoc.text);
+        activeDoc.text = undoStack.pop();
+        docListener?.({ document: activeDoc });
+        return;
+      }
+      if (cmd === "redo") {
+        if (!redoStack.length) {
+          return;
+        }
+        undoStack.push(activeDoc.text);
+        activeDoc.text = redoStack.pop();
+        docListener?.({ document: activeDoc });
+      }
     },
   },
   window: {
@@ -113,6 +139,8 @@ activate({ extensionUri: { p: "/ext" }, subscriptions: [] });
 
 /** Opens `text` in the editor and returns helpers to drive it. */
 function open(text, name) {
+  undoStack = [];
+  redoStack = [];
   activeDoc = new Doc(text, name);
   const sent = [];
   const panel = {
@@ -383,6 +411,19 @@ test("naming an untitled task inserts the missing space", () => {
   assert.strictEqual(ed.text, "# T\n\n- [ ] Fresh\n");
 });
 
+test("clearing a task title keeps the task as untitled", () => {
+  const ed = open(SAMPLE);
+  ed.send({ t: "text", line: 3, text: "" });
+  assert.match(ed.text.split("\n")[3], /^- \[ \] ?$/);
+  assert.deepStrictEqual(parsePlan(ed.text, "x").tasks[0], {
+    line: 3,
+    title: "",
+    status: "todo",
+    parent: null,
+  });
+  assert.strictEqual(parsePlan(ed.text, "x").tasks.length, 5);
+});
+
 test("renaming a task never appends another task", () => {
   const ed = open(SAMPLE);
   const before = ed.text.split("\n").length;
@@ -577,6 +618,55 @@ test("editing never loses hierarchy, titles, or statuses", async () => {
     ["three", "in_progress", 1],
     ["Last", "todo", 0],
   ]);
+});
+
+/* ---------- undo / redo ---------- */
+
+test("undo and redo restore the document and push the plan to the webview", async () => {
+  const ed = open(SAMPLE);
+  await ed.send({ t: "status", line: 3, status: "done" });
+  assert.strictEqual(ed.text.split("\n")[3], "- [x] Alpha");
+
+  await ed.send({ t: "undo" });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.strictEqual(ed.text, SAMPLE);
+  assert.strictEqual(ed.sent[ed.sent.length - 1].tasks[0].status, "todo");
+
+  await ed.send({ t: "redo" });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.strictEqual(ed.text.split("\n")[3], "- [x] Alpha");
+  assert.strictEqual(ed.sent[ed.sent.length - 1].tasks[0].status, "done");
+});
+
+test("multiple edits undo and redo in order without losing hierarchy", async () => {
+  const ed = open(SAMPLE);
+  await ed.send({ t: "status", line: 3, status: "done" });
+  await ed.send({ t: "text", line: 3, text: "Renamed" });
+  await ed.send({ t: "addTask", parent: 3 });
+  assert.match(ed.text, /- \[x\] Renamed\n  - \[ \] one\n  - \[x\] two\n  - \[ \]/);
+
+  await ed.send({ t: "undo" });
+  assert.strictEqual(
+    ed.text.split("\n").slice(3, 6).join("\n"),
+    "- [x] Renamed\n  - [ ] one\n  - [x] two"
+  );
+
+  await ed.send({ t: "undo" });
+  assert.strictEqual(ed.text.split("\n")[3], "- [x] Alpha");
+
+  await ed.send({ t: "undo" });
+  assert.strictEqual(ed.text, SAMPLE);
+  assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
+    ["Alpha", "todo", 0],
+    ["one", "todo", 1],
+    ["two", "done", 1],
+    ["Omega", "in_progress", 0],
+    ["three", "in_progress", 1],
+  ]);
+
+  await ed.send({ t: "redo" });
+  await ed.send({ t: "redo" });
+  assert.strictEqual(ed.text.split("\n")[3], "- [x] Renamed");
 });
 
 /* ---------- sync ---------- */

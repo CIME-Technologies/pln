@@ -307,16 +307,12 @@
   }
 
   /**
-   * Begin editing a task title. An empty commit deletes the task.
+   * Begin editing a task title. An empty title is kept and shown as Untitled.
    * @param {HTMLElement} row
    * @param {{line: number, title: string}} task
    */
   function editTask(row, task) {
     edit(row.querySelector(".row-title"), task.title, (value) => {
-      if (!value) {
-        post({ t: "deleteTask", line: task.line });
-        return true;
-      }
       if (value === task.title) {
         return false;
       }
@@ -459,7 +455,25 @@
     post({ t: "addTask", parent: null });
   });
 
-  document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeMenu();
+      return;
+    }
+    // While typing in an inline field, let the browser undo local keystrokes.
+    // Otherwise forward to VS Code so WorkspaceEdit history is undone/redone.
+    if (activeInput || !(e.metaKey || e.ctrlKey)) {
+      return;
+    }
+    const key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      post({ t: "undo" });
+    } else if ((key === "z" && e.shiftKey) || (key === "y" && e.ctrlKey && !e.metaKey)) {
+      e.preventDefault();
+      post({ t: "redo" });
+    }
+  });
 
   window.addEventListener("message", (e) => {
     if (activeInput) {

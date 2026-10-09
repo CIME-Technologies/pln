@@ -44,8 +44,8 @@ the underlying markdown at any point, use **Reopen Editor With… → Text Edito
 - **Change a status** by clicking its circle, which cycles todo → in progress →
   done. The task menu (`⋯`) sets a status directly.
 - **Rename** by clicking a task's title, or the project title or description.
-  Clearing a task's title deletes it. Clearing the project title removes the
-  `#` heading from the file and shows **Untitled** in the editor.
+  Clearing a task title keeps the task and shows **Untitled**. Clearing the
+  project title removes the `#` heading from the file and shows **Untitled**.
 - **Delete** from the `⋯` menu. Deleting a task that has subtasks asks first
   and then removes the whole branch.
 - **Collapse** a task by clicking its chevron. Collapsed tasks are remembered
