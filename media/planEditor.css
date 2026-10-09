@@ -377,7 +377,11 @@ button {
   line-height: 1.25;
 }
 
+/* The hero is not a flex container, so this input needs an explicit width. */
 .hero > .inline-input {
+  display: block;
+  width: 100%;
+  max-width: 68ch;
   margin: 0 0 16px;
   color: var(--text-2);
   line-height: 1.55;

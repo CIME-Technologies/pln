@@ -1,20 +1,17 @@
 # Product Launch
-Everything required to prepare the product for public release.
+Draft the announcement post
 
 - [-] Research
   - [x] Define target audience
   - [-] Review competitive landscape
     - [ ] Summarise the pricing study
-- [ ] Design
+- [x] Design
   - [ ] Map information architecture
   - [x] Hand off design tokens
   - [ ] Polish the empty states
-- [-] Engineering
+- [ ] Engineering
   - [x] Set up the CI pipeline
   - [-] Implement onboarding flow
     - [x] Wire up the API
     - [ ] Add the welcome screen
   - [ ] Integrate billing
-- [ ] Launch
-  - [ ] Draft the announcement post
-  - [ ] Brief the support team
