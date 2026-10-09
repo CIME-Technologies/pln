@@ -150,10 +150,10 @@ A short plan.
   - [-] three
 `;
 
-/** Issues as [title, status, depth], using parent links to derive depth. */
+/** Tasks as [title, status, depth], using parent links to derive depth. */
 function outline(plan) {
   const depth = new Map();
-  return plan.issues.map((i) => {
+  return plan.tasks.map((i) => {
     const d = i.parent === null ? 0 : depth.get(i.parent) + 1;
     depth.set(i.line, d);
     return [i.title, i.status, d];
@@ -177,8 +177,8 @@ test("parses the project title, description, and the three statuses", () => {
   ]);
 });
 
-test("an issue carries only a title, a status, and a parent", () => {
-  assert.deepStrictEqual(parsePlan("- [ ] A\n  - [x] B\n", "x").issues, [
+test("a task carries only a title, a status, and a parent", () => {
+  assert.deepStrictEqual(parsePlan("- [ ] A\n  - [x] B\n", "x").tasks, [
     { line: 0, title: "A", status: "todo", parent: null },
     { line: 1, title: "B", status: "done", parent: 0 },
   ]);
@@ -188,10 +188,10 @@ test("falls back to the file name when there is no title", () => {
   assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").title, "my-plan");
 });
 
-test("nests sub-issues several levels deep", () => {
+test("nests subtasks several levels deep", () => {
   const plan = parsePlan("- [ ] a\n  - [ ] b\n    - [ ] c\n      - [x] d\n- [ ] e\n", "x");
   assert.deepStrictEqual(
-    plan.issues.map((i) => [i.title, i.parent]),
+    plan.tasks.map((i) => [i.title, i.parent]),
     [
       ["a", null],
       ["b", 0],
@@ -217,16 +217,16 @@ test("accepts any consistent indentation width, including tabs", () => {
   for (const unit of ["  ", "    ", "\t", " "]) {
     const text = `- [ ] a\n${unit}- [ ] b\n${unit}- [ ] c\n${unit}${unit}- [ ] d\n`;
     assert.deepStrictEqual(
-      parsePlan(text, "x").issues.map((i) => i.parent),
+      parsePlan(text, "x").tasks.map((i) => i.parent),
       [null, 0, 0, 2],
       JSON.stringify(unit)
     );
   }
 });
 
-test("parses issue titles containing spaces and punctuation", () => {
+test("parses task titles containing spaces and punctuation", () => {
   assert.deepStrictEqual(
-    parsePlan("- [ ] Engineering & Infrastructure\n  - [x] Final  QA\n", "x").issues.map(
+    parsePlan("- [ ] Engineering & Infrastructure\n  - [x] Final  QA\n", "x").tasks.map(
       (i) => i.title
     ),
     ["Engineering & Infrastructure", "Final  QA"]
@@ -247,16 +247,16 @@ test("handles empty and malformed content without throwing", () => {
     titleLine: -1,
     description: "",
     descriptionLine: -1,
-    issues: [],
+    tasks: [],
   });
 
   assert.deepStrictEqual(
-    parsePlan("- [ ] orphan\n- plain bullet\n- [ ]x\nrandom text\n", "x").issues.map((i) => i.title),
+    parsePlan("- [ ] orphan\n- plain bullet\n- [ ]x\nrandom text\n", "x").tasks.map((i) => i.title),
     ["orphan"],
     "non-checkbox lines are ignored"
   );
 
-  assert.deepStrictEqual(parsePlan("- [ ]\n", "x").issues[0], {
+  assert.deepStrictEqual(parsePlan("- [ ]\n", "x").tasks[0], {
     line: 0,
     title: "",
     status: "todo",
@@ -264,7 +264,7 @@ test("handles empty and malformed content without throwing", () => {
   });
 
   assert.strictEqual(
-    parsePlan("  * [X] starred\n", "x").issues[0].status,
+    parsePlan("  * [X] starred\n", "x").tasks[0].status,
     "done",
     "alternate markers and uppercase X are accepted"
   );
@@ -280,7 +280,7 @@ test("heading lines are not treated as structure", () => {
     ["a", "todo", 0],
     ["b", "todo", 1],
   ]);
-  assert.ok(!("sections" in plan) && !("tasks" in plan));
+  assert.ok(!("sections" in plan));
 });
 
 test("section messages are rejected and leave the file alone", async () => {
@@ -288,7 +288,6 @@ test("section messages are rejected and leave the file alone", async () => {
     { t: "addSection" },
     { t: "renameSection", line: 3, title: "Nope" },
     { t: "deleteSection", line: 3 },
-    { t: "addTask" },
   ]) {
     const ed = open(SAMPLE);
     const before = ed.sent.length;
@@ -298,14 +297,14 @@ test("section messages are rejected and leave the file alone", async () => {
   }
 });
 
-test("the webview shows no generated issue identifiers", () => {
+test("the webview shows no generated task identifiers", () => {
   const ed = open(SAMPLE);
-  for (const issue of ed.sent[0].issues) {
-    assert.deepStrictEqual(Object.keys(issue).sort(), ["line", "parent", "status", "title"]);
+  for (const task of ed.sent[0].tasks) {
+    assert.deepStrictEqual(Object.keys(task).sort(), ["line", "parent", "status", "title"]);
   }
   const fs = require("node:fs");
   const ui = ed.panel.webview.html + fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
-  assert.doesNotMatch(ui, /row-id|issuePrefix|nextId/);
+  assert.doesNotMatch(ui, /row-id|taskPrefix|nextId/);
 });
 
 /* ---------- opening ---------- */
@@ -314,7 +313,7 @@ test("sends the parsed plan once the webview reports ready", () => {
   const ed = open(SAMPLE);
   assert.strictEqual(ed.sent.length, 1);
   assert.strictEqual(ed.sent[0].title, "Demo");
-  assert.strictEqual(ed.sent[0].issues.length, 5);
+  assert.strictEqual(ed.sent[0].tasks.length, 5);
 });
 
 /* ---------- status ---------- */
@@ -338,11 +337,11 @@ test("rapid consecutive status changes land on the last one", () => {
   assert.strictEqual(ed.text.split("\n")[4], "  - [x] one");
 });
 
-test("ignores edits aimed at a line that is no longer an issue", async () => {
+test("ignores edits aimed at a line that is no longer a task", async () => {
   const ed = open(SAMPLE);
   ed.send({ t: "status", line: 1, status: "done" });
   ed.send({ t: "status", line: 4, status: "nonsense" });
-  await ed.send({ t: "deleteIssue", line: 0 });
+  await ed.send({ t: "deleteTask", line: 0 });
   ed.send({ t: "text", line: 2, text: "nope" });
   assert.strictEqual(ed.text, SAMPLE);
 });
@@ -352,12 +351,12 @@ test("resyncs the webview when an edit is rejected", async () => {
   const before = ed.sent.length;
   await ed.send({ t: "status", line: 1, status: "done" });
   assert.strictEqual(ed.sent.length, before + 1, "optimistic paint must be reverted");
-  assert.strictEqual(ed.sent[before].issues[0].status, "todo");
+  assert.strictEqual(ed.sent[before].tasks[0].status, "todo");
 });
 
-/* ---------- issue titles ---------- */
+/* ---------- task titles ---------- */
 
-test("renames an issue without touching its status or parent", () => {
+test("renames a task without touching its status or parent", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "text", line: 5, text: "renamed" });
   assert.strictEqual(ed.text.split("\n")[5], "  - [x] renamed");
@@ -370,27 +369,27 @@ test("renames an issue without touching its status or parent", () => {
   ]);
 });
 
-test("renaming keeps the indentation of a deeply nested issue", () => {
+test("renaming keeps the indentation of a deeply nested task", () => {
   const ed = open("- [ ] a\n    - [ ] b\n        - [ ] c\n");
   ed.send({ t: "text", line: 2, text: "c renamed" });
   assert.strictEqual(ed.text, "- [ ] a\n    - [ ] b\n        - [ ] c renamed\n");
-  assert.strictEqual(parsePlan(ed.text, "x").issues[2].parent, 1);
+  assert.strictEqual(parsePlan(ed.text, "x").tasks[2].parent, 1);
 });
 
-test("naming an untitled issue inserts the missing space", () => {
+test("naming an untitled task inserts the missing space", () => {
   const ed = open("# T\n\n- [ ]\n");
   ed.send({ t: "text", line: 2, text: "Fresh" });
   assert.strictEqual(ed.text, "# T\n\n- [ ] Fresh\n");
 });
 
-test("renaming an issue never appends another issue", () => {
+test("renaming a task never appends another task", () => {
   const ed = open(SAMPLE);
   const before = ed.text.split("\n").length;
   ed.send({ t: "text", line: 3, text: "first" });
   assert.strictEqual(ed.text.split("\n").length, before, "line count must not grow");
 });
 
-test("issue titles keep internal spaces and punctuation", () => {
+test("task titles keep internal spaces and punctuation", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "text", line: 3, text: "Review  Q3 & Q4  plans" });
   assert.strictEqual(ed.text.split("\n")[3], "- [ ] Review  Q3 & Q4  plans");
@@ -398,50 +397,50 @@ test("issue titles keep internal spaces and punctuation", () => {
 
 /* ---------- adding ---------- */
 
-test("adds a top-level issue at the end of the file", () => {
+test("adds a top-level task at the end of the file", () => {
   const ed = open(SAMPLE);
-  ed.send({ t: "addIssue", parent: null });
+  ed.send({ t: "addTask", parent: null });
   assert.strictEqual(ed.text, SAMPLE + "- [ ]");
   const plan = parsePlan(ed.text, "x");
-  assert.strictEqual(plan.issues[plan.issues.length - 1].parent, null);
+  assert.strictEqual(plan.tasks[plan.tasks.length - 1].parent, null);
 });
 
-test("adds a top-level issue to a file with no trailing newline", () => {
+test("adds a top-level task to a file with no trailing newline", () => {
   const ed = open("# T\n\n- [ ] x");
-  ed.send({ t: "addIssue", parent: null });
+  ed.send({ t: "addTask", parent: null });
   assert.strictEqual(ed.text, "# T\n\n- [ ] x\n- [ ]");
 });
 
-test("adds a top-level issue to a file with only a title", () => {
+test("adds a top-level task to a file with only a title", () => {
   const ed = open("# T\n");
-  ed.send({ t: "addIssue", parent: null });
+  ed.send({ t: "addTask", parent: null });
   assert.strictEqual(ed.text, "# T\n- [ ]");
 });
 
-test("adds a sub-issue below its parent's existing descendants", () => {
+test("adds a subtask below its parent's existing descendants", () => {
   const ed = open(SAMPLE);
-  ed.send({ t: "addIssue", parent: 3 });
+  ed.send({ t: "addTask", parent: 3 });
   assert.strictEqual(ed.text.split("\n").slice(3, 7).join("\n"), "- [ ] Alpha\n  - [ ] one\n  - [x] two\n  - [ ]");
   const plan = parsePlan(ed.text, "x");
-  assert.strictEqual(plan.issues[3].parent, 3, "the new issue belongs to Alpha");
+  assert.strictEqual(plan.tasks[3].parent, 3, "the new task belongs to Alpha");
 });
 
-test("adds a sub-issue one level deeper than its parent", () => {
+test("adds a subtask one level deeper than its parent", () => {
   const ed = open(SAMPLE);
-  ed.send({ t: "addIssue", parent: 4 });
+  ed.send({ t: "addTask", parent: 4 });
   assert.strictEqual(ed.text.split("\n")[5], "    - [ ]");
-  assert.strictEqual(parsePlan(ed.text, "x").issues[2].parent, 4);
+  assert.strictEqual(parsePlan(ed.text, "x").tasks[2].parent, 4);
 });
 
-test("adding a sub-issue skips a whole subtree, not just direct children", () => {
+test("adding a subtask skips a whole subtree, not just direct children", () => {
   const ed = open("- [ ] a\n  - [ ] b\n    - [ ] c\n- [ ] d\n");
-  ed.send({ t: "addIssue", parent: 0 });
+  ed.send({ t: "addTask", parent: 0 });
   assert.strictEqual(ed.text, "- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ]\n- [ ] d\n");
 });
 
-test("a new sub-issue can be named and persists", () => {
+test("a new subtask can be named and persists", () => {
   const ed = open("# T\n\n- [ ] Parent\n");
-  ed.send({ t: "addIssue", parent: 2 });
+  ed.send({ t: "addTask", parent: 2 });
   ed.send({ t: "text", line: 3, text: "Call the design partners" });
   assert.strictEqual(ed.text, "# T\n\n- [ ] Parent\n  - [ ] Call the design partners\n");
   assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
@@ -452,40 +451,40 @@ test("a new sub-issue can be named and persists", () => {
 
 /* ---------- deleting ---------- */
 
-test("deletes a leaf issue without asking", async () => {
+test("deletes a leaf task without asking", async () => {
   warning = { reply: "Delete", calls: [] };
   const ed = open(SAMPLE);
-  await ed.send({ t: "deleteIssue", line: 4 });
+  await ed.send({ t: "deleteTask", line: 4 });
   assert.deepStrictEqual(warning.calls, []);
   assert.strictEqual(ed.text, "# Demo\nA short plan.\n\n- [ ] Alpha\n  - [x] two\n- [-] Omega\n  - [-] three\n");
 });
 
-test("deletes an issue that is the last line of the file", async () => {
+test("deletes a task that is the last line of the file", async () => {
   const ed = open("- [ ] only");
-  await ed.send({ t: "deleteIssue", line: 0 });
+  await ed.send({ t: "deleteTask", line: 0 });
   assert.strictEqual(ed.text, "");
 });
 
-test("confirms before deleting an issue that has sub-issues", async () => {
+test("confirms before deleting a task that has subtasks", async () => {
   warning = { reply: "Delete", calls: [] };
   const ed = open(SAMPLE);
-  await ed.send({ t: "deleteIssue", line: 3 });
-  assert.match(warning.calls[0], /Delete "Alpha" and its 2 sub-issues\?/);
+  await ed.send({ t: "deleteTask", line: 3 });
+  assert.match(warning.calls[0], /Delete "Alpha" and its 2 subtasks\?/);
   assert.strictEqual(ed.text, "# Demo\nA short plan.\n\n- [-] Omega\n  - [-] three\n");
 });
 
 test("deleting a parent removes the entire subtree", async () => {
   warning = { reply: "Delete", calls: [] };
   const ed = open("- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ] d\n- [ ] e\n");
-  await ed.send({ t: "deleteIssue", line: 0 });
-  assert.match(warning.calls[0], /its 3 sub-issues/);
+  await ed.send({ t: "deleteTask", line: 0 });
+  assert.match(warning.calls[0], /its 3 subtasks/);
   assert.strictEqual(ed.text, "- [ ] e\n");
 });
 
 test("cancelling the confirmation leaves the file untouched", async () => {
   warning = { reply: undefined, calls: [] };
   const ed = open(SAMPLE);
-  await ed.send({ t: "deleteIssue", line: 3 });
+  await ed.send({ t: "deleteTask", line: 3 });
   assert.strictEqual(ed.text, SAMPLE);
 });
 
@@ -545,18 +544,18 @@ test("the bundled example survives a parse and reports its hierarchy", () => {
   assert.strictEqual(plan.title, "Product Launch");
   assert.ok(plan.description.length > 0);
   assert.ok(!/^##/m.test(text), "the example must not use sections");
-  assert.strictEqual(plan.issues.filter((i) => i.parent === null).length, 4);
-  assert.ok(plan.issues.some((i) => i.status === "in_progress"));
-  assert.ok(plan.issues.some((i) => i.status === "done"));
+  assert.strictEqual(plan.tasks.filter((i) => i.parent === null).length, 4);
+  assert.ok(plan.tasks.some((i) => i.status === "in_progress"));
+  assert.ok(plan.tasks.some((i) => i.status === "done"));
   assert.ok(outline(plan).some(([, , d]) => d === 2), "the example exercises deep nesting");
 });
 
 test("editing never loses hierarchy, titles, or statuses", async () => {
   const ed = open(SAMPLE);
-  ed.send({ t: "addIssue", parent: 3 });
+  ed.send({ t: "addTask", parent: 3 });
   ed.send({ t: "text", line: 6, text: "four" });
   ed.send({ t: "status", line: 6, status: "done" });
-  ed.send({ t: "addIssue", parent: null });
+  ed.send({ t: "addTask", parent: null });
   ed.send({ t: "text", line: 9, text: "Last" });
   assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
     ["Alpha", "todo", 0],
@@ -576,6 +575,6 @@ test("pushes a fresh plan to the webview after the document changes", async () =
   ed.send({ t: "status", line: 4, status: "done" });
   await new Promise((r) => setTimeout(r, 150));
   const latest = ed.sent[ed.sent.length - 1];
-  assert.strictEqual(latest.issues[1].status, "done");
+  assert.strictEqual(latest.tasks[1].status, "done");
   assert.ok(ed.sent.length > 1, "webview should receive an update after an edit");
 });

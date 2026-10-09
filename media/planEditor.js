@@ -7,9 +7,9 @@
     meta: $("meta"),
     donut: $("donut"),
     pct: $("pct"),
-    list: $("issues"),
+    list: $("tasks"),
     empty: $("empty"),
-    addIssue: $("add-issue"),
+    addTask: $("add-task"),
   };
 
   const LABEL = { todo: "Todo", in_progress: "In Progress", done: "Done" };
@@ -20,7 +20,7 @@
   const post = (m) => vscode.postMessage(m);
   const persist = () => vscode.setState({ collapsed: [...collapsed] });
 
-  let plan = { title: "Plan", description: "", issues: [] };
+  let plan = { title: "Plan", description: "", tasks: [] };
   let menu = null;
   /** A line to edit, or { childOf } to edit the newest child of that parent. */
   let focusAfterRender = null;
@@ -77,17 +77,17 @@
   /* ---------- render ---------- */
 
   /**
-   * Depth, child count and collapse key for every issue, in one pass. Collapse
+   * Depth, child count and collapse key for every task, in one pass. Collapse
    * is keyed by title path rather than line, since any edit shifts the lines
    * below it.
    */
-  function layout(issues) {
+  function layout(tasks) {
     const view = new Map();
     const seen = new Map();
 
-    for (const issue of issues) {
-      const parent = issue.parent === null ? null : view.get(issue.parent);
-      let key = (parent ? parent.key + "/" : "") + issue.title;
+    for (const task of tasks) {
+      const parent = task.parent === null ? null : view.get(task.parent);
+      let key = (parent ? parent.key + "/" : "") + task.title;
       const nth = (seen.get(key) || 0) + 1;
       seen.set(key, nth);
       if (nth > 1) {
@@ -96,7 +96,7 @@
       if (parent) {
         parent.children += 1;
       }
-      view.set(issue.line, { depth: parent ? parent.depth + 1 : 0, key, children: 0 });
+      view.set(task.line, { depth: parent ? parent.depth + 1 : 0, key, children: 0 });
     }
 
     for (const v of view.values()) {
@@ -108,10 +108,10 @@
   function render() {
     closeMenu();
 
-    const issues = plan.issues;
-    const done = issues.filter((i) => i.status === "done").length;
-    const active = issues.filter((i) => i.status === "in_progress").length;
-    const ratio = issues.length ? done / issues.length : 0;
+    const tasks = plan.tasks;
+    const done = tasks.filter((i) => i.status === "done").length;
+    const active = tasks.filter((i) => i.status === "in_progress").length;
+    const ratio = tasks.length ? done / tasks.length : 0;
 
     el.title.textContent = plan.title;
     el.description.textContent = plan.description || "Add a description…";
@@ -120,14 +120,14 @@
     el.donut.setAttribute("stroke-dasharray", DONUT);
     el.donut.setAttribute("stroke-dashoffset", DONUT * (1 - ratio));
     el.meta.innerHTML =
-      chip("todo", issues.length - done - active) +
+      chip("todo", tasks.length - done - active) +
       chip("in_progress", active) +
       chip("done", done) +
-      `<span class="chip">${issues.length} ${issues.length === 1 ? "issue" : "issues"}</span>`;
+      `<span class="chip">${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}</span>`;
 
-    const view = layout(issues);
+    const view = layout(tasks);
 
-    // Forget issues that are gone, so a re-created title starts expanded.
+    // Forget tasks that are gone, so a re-created title starts expanded.
     const live = new Set([...view.values()].map((v) => v.key));
     const stale = [...collapsed].filter((key) => !live.has(key));
     if (stale.length) {
@@ -136,16 +136,16 @@
     }
 
     el.list.innerHTML = "";
-    el.empty.classList.toggle("hidden", issues.length > 0);
+    el.empty.classList.toggle("hidden", tasks.length > 0);
 
     let hideBelow = Infinity;
-    for (const issue of issues) {
-      const v = view.get(issue.line);
+    for (const task of tasks) {
+      const v = view.get(task.line);
       if (v.depth > hideBelow) {
         continue;
       }
       hideBelow = v.collapsed ? v.depth : Infinity;
-      el.list.appendChild(renderRow(issue, v));
+      el.list.appendChild(renderRow(task, v));
     }
 
     shown = JSON.stringify(plan);
@@ -154,10 +154,10 @@
   const chip = (status, count) =>
     `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${LABEL[status]}</span>`;
 
-  function renderRow(issue, v) {
+  function renderRow(task, v) {
     const row = document.createElement("li");
-    row.className = "row" + (issue.status === "done" ? " done" : "");
-    row.dataset.line = issue.line;
+    row.className = "row" + (task.status === "done" ? " done" : "");
+    row.dataset.line = task.line;
     row.style.paddingLeft = `${16 + v.depth * 20}px`;
 
     const twisty = document.createElement("button");
@@ -175,41 +175,41 @@
 
     const status = document.createElement("button");
     status.type = "button";
-    status.className = `status ${issue.status}`;
-    status.innerHTML = statusIcon(issue.status);
-    status.title = `${LABEL[issue.status]} — click to change`;
+    status.className = `status ${task.status}`;
+    status.innerHTML = statusIcon(task.status);
+    status.title = `${LABEL[task.status]} — click to change`;
     status.addEventListener("click", () =>
-      setStatus(issue, ORDER[(ORDER.indexOf(issue.status) + 1) % ORDER.length])
+      setStatus(task, ORDER[(ORDER.indexOf(task.status) + 1) % ORDER.length])
     );
 
     const title = document.createElement("span");
-    title.className = "row-title" + (issue.title ? "" : " placeholder");
-    title.textContent = issue.title || "Untitled";
-    title.addEventListener("click", () => editIssue(row, issue));
+    title.className = "row-title" + (task.title ? "" : " placeholder");
+    title.textContent = task.title || "Untitled";
+    title.addEventListener("click", () => editTask(row, task));
 
-    const add = iconButton(PLUS, "Add sub-issue", () => {
+    const add = iconButton(PLUS, "Add subtask", () => {
       collapsed.delete(v.key);
       persist();
-      focusAfterRender = { childOf: issue.line };
-      post({ t: "addIssue", parent: issue.line });
+      focusAfterRender = { childOf: task.line };
+      post({ t: "addTask", parent: task.line });
     });
 
-    const more = iconButton(DOTS, "Issue options", () =>
+    const more = iconButton(DOTS, "Task options", () =>
       openMenu(more, [
         ...ORDER.map((s) => ({
           label: LABEL[s],
           icon: statusIcon(s),
           iconClass: `status-glyph ${s}`,
-          selected: s === issue.status,
-          run: () => setStatus(issue, s),
+          selected: s === task.status,
+          run: () => setStatus(task, s),
         })),
         { separator: true },
-        { label: "Rename", icon: PENCIL, run: () => editIssue(row, issue) },
+        { label: "Rename", icon: PENCIL, run: () => editTask(row, task) },
         {
           label: "Delete",
           icon: TRASH,
           danger: true,
-          run: () => post({ t: "deleteIssue", line: issue.line }),
+          run: () => post({ t: "deleteTask", line: task.line }),
         },
       ])
     );
@@ -238,10 +238,10 @@
    * Paint the new status straight away instead of waiting out the provider's
    * debounce. The document stays authoritative: its next push overwrites this.
    */
-  function setStatus(issue, status) {
-    issue.status = status;
+  function setStatus(task, status) {
+    task.status = status;
     render();
-    post({ t: "status", line: issue.line, status });
+    post({ t: "status", line: task.line, status });
   }
 
   function editTitle() {
@@ -266,17 +266,17 @@
     });
   }
 
-  function editIssue(row, issue) {
-    edit(row.querySelector(".row-title"), issue.title, (value) => {
+  function editTask(row, task) {
+    edit(row.querySelector(".row-title"), task.title, (value) => {
       if (!value) {
-        post({ t: "deleteIssue", line: issue.line });
+        post({ t: "deleteTask", line: task.line });
         return true;
       }
-      if (value === issue.title) {
+      if (value === task.title) {
         return false;
       }
-      issue.title = value;
-      post({ t: "text", line: issue.line, text: value });
+      task.title = value;
+      post({ t: "text", line: task.line, text: value });
       return true;
     });
   }
@@ -336,15 +336,15 @@
       return;
     }
     if (typeof focusAfterRender === "object") {
-      // The issue we just asked for is the newest child of that parent.
-      const siblings = plan.issues.filter((i) => i.parent === focusAfterRender.childOf);
+      // The task we just asked for is the newest child of that parent.
+      const siblings = plan.tasks.filter((i) => i.parent === focusAfterRender.childOf);
       const last = siblings[siblings.length - 1];
       focusAfterRender = last ? last.line : null;
     }
     const row = el.list.querySelector(`.row[data-line="${focusAfterRender}"]`);
-    const issue = plan.issues.find((i) => i.line === focusAfterRender);
-    if (row && issue) {
-      editIssue(row, issue);
+    const task = plan.tasks.find((i) => i.line === focusAfterRender);
+    if (row && task) {
+      editTask(row, task);
     }
   }
 
@@ -403,9 +403,9 @@
   el.title.addEventListener("click", editTitle);
   el.description.addEventListener("click", editDescription);
 
-  el.addIssue.addEventListener("click", () => {
+  el.addTask.addEventListener("click", () => {
     focusAfterRender = { childOf: null };
-    post({ t: "addIssue", parent: null });
+    post({ t: "addTask", parent: null });
   });
 
   document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());

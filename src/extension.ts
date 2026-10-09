@@ -4,11 +4,11 @@ import * as vscode from "vscode";
 
 export type Status = "todo" | "in_progress" | "done";
 
-export interface Issue {
+export interface Task {
   line: number;
   title: string;
   status: Status;
-  /** Line of the parent issue, or null for a top-level issue. */
+  /** Line of the parent task, or null for a top-level task. */
   parent: number | null;
 }
 
@@ -17,11 +17,11 @@ export interface Plan {
   titleLine: number;
   description: string;
   descriptionLine: number;
-  /** Document order; a sub-issue always follows its parent. */
-  issues: Issue[];
+  /** Document order; a subtask always follows its parent. */
+  tasks: Task[];
 }
 
-const ISSUE = /^[ \t]*[-*+][ \t]+\[([ xX-])\](?:[ \t]+(.*))?$/;
+const TASK = /^[ \t]*[-*+][ \t]+\[([ xX-])\](?:[ \t]+(.*))?$/;
 const TITLE = /^#[ \t]+(.+)$/;
 /** Written indentation per level; any consistent indentation is accepted. */
 const INDENT = "  ";
@@ -50,23 +50,23 @@ export function parsePlan(text: string, fallbackTitle: string): Plan {
     titleLine: -1,
     description: "",
     descriptionLine: -1,
-    issues: [],
+    tasks: [],
   };
   // Open ancestors, shallowest first. The parent of a line is the nearest
-  // preceding issue indented less than it, whatever indent width the file uses.
+  // preceding task indented less than it, whatever indent width the file uses.
   const open: { indent: number; line: number }[] = [];
 
   text.split(/\r?\n/).forEach((raw, i) => {
-    const issue = ISSUE.exec(raw);
-    if (issue) {
+    const task = TASK.exec(raw);
+    if (task) {
       const indent = indentOf(raw);
       while (open.length && open[open.length - 1].indent >= indent) {
         open.pop();
       }
-      plan.issues.push({
+      plan.tasks.push({
         line: i,
-        title: issue[2] ?? "",
-        status: statusOf(issue[1]),
+        title: task[2] ?? "",
+        status: statusOf(task[1]),
         parent: open.length ? open[open.length - 1].line : null,
       });
       open.push({ indent, line: i });
@@ -79,14 +79,14 @@ export function parsePlan(text: string, fallbackTitle: string): Plan {
       return;
     }
     // The description is the first prose line under the title, before the
-    // first issue opens the body of the plan.
+    // first task opens the body of the plan.
     const prose = raw.trim();
     if (
       prose &&
       !prose.startsWith("#") &&
       plan.titleLine >= 0 &&
       plan.descriptionLine < 0 &&
-      !plan.issues.length
+      !plan.tasks.length
     ) {
       plan.description = prose;
       plan.descriptionLine = i;
@@ -96,23 +96,23 @@ export function parsePlan(text: string, fallbackTitle: string): Plan {
   return plan;
 }
 
-/** Every issue below `line`, in document order. */
-function descendants(plan: Plan, line: number): Issue[] {
+/** Every task below `line`, in document order. */
+function descendants(plan: Plan, line: number): Task[] {
   const inside = new Set([line]);
-  return plan.issues.filter((issue) => {
-    if (issue.parent !== null && inside.has(issue.parent)) {
-      inside.add(issue.line);
+  return plan.tasks.filter((task) => {
+    if (task.parent !== null && inside.has(task.parent)) {
+      inside.add(task.line);
       return true;
     }
     return false;
   });
 }
 
-/** Nesting depth of every issue, keyed by line. */
+/** Nesting depth of every task, keyed by line. */
 function depths(plan: Plan): Map<number, number> {
   const depth = new Map<number, number>();
-  for (const issue of plan.issues) {
-    depth.set(issue.line, issue.parent === null ? 0 : (depth.get(issue.parent) ?? 0) + 1);
+  for (const task of plan.tasks) {
+    depth.set(task.line, task.parent === null ? 0 : (depth.get(task.parent) ?? 0) + 1);
   }
   return depth;
 }
@@ -160,8 +160,8 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
   }
 
   private async edit(doc: vscode.TextDocument, m: any): Promise<boolean> {
-    if (m.t === "deleteIssue") {
-      return this.deleteIssue(doc, m.line);
+    if (m.t === "deleteTask") {
+      return this.deleteTask(doc, m.line);
     }
 
     const edit = new vscode.WorkspaceEdit();
@@ -197,13 +197,13 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         }
         break;
       }
-      case "addIssue": {
+      case "addTask": {
         if (m.parent === null || m.parent === undefined) {
           const last = doc.lineAt(doc.lineCount - 1);
           edit.insert(doc.uri, last.range.end, `${last.text.trim() ? "\n" : ""}- [ ]`);
           break;
         }
-        // A sub-issue goes after everything already nested under its parent.
+        // A subtask goes after everything already nested under its parent.
         const below = descendants(plan, m.parent);
         const after = below.length ? below[below.length - 1].line : m.parent;
         const depth = (depths(plan).get(m.parent) ?? 0) + 1;
@@ -212,7 +212,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
       }
       case "status": {
         const line = at(m.line);
-        if (!ISSUE.test(line.text) || !(m.status in TOKEN)) {
+        if (!TASK.test(line.text) || !(m.status in TOKEN)) {
           return false;
         }
         const box = line.text.indexOf("[") + 1;
@@ -225,7 +225,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
       }
       case "text": {
         const line = at(m.line);
-        if (!ISSUE.test(line.text)) {
+        if (!TASK.test(line.text)) {
           return false;
         }
         const afterBox = line.text.indexOf("]") + 1;
@@ -248,19 +248,19 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     return vscode.workspace.applyEdit(edit);
   }
 
-  /** Deletes an issue together with everything nested under it. */
-  private async deleteIssue(doc: vscode.TextDocument, line: number): Promise<boolean> {
+  /** Deletes a task together with everything nested under it. */
+  private async deleteTask(doc: vscode.TextDocument, line: number): Promise<boolean> {
     const plan = parsePlan(doc.getText(), "");
-    const issue = plan.issues.find((i) => i.line === line);
-    if (!issue) {
+    const task = plan.tasks.find((i) => i.line === line);
+    if (!task) {
       return false;
     }
 
     const below = descendants(plan, line);
     if (below.length) {
       const confirm = await vscode.window.showWarningMessage(
-        `Delete "${issue.title || "Untitled"}" and its ${below.length} ` +
-          `${below.length === 1 ? "sub-issue" : "sub-issues"}?`,
+        `Delete "${task.title || "Untitled"}" and its ${below.length} ` +
+          `${below.length === 1 ? "subtask" : "subtasks"}?`,
         { modal: true },
         "Delete"
       );
@@ -306,7 +306,7 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
     <div class="hero-meta" id="meta"></div>
   </section>
 
-  <ul class="rows" id="issues"></ul>
+  <ul class="rows" id="tasks"></ul>
 
   <div id="empty" class="empty hidden">
     <svg class="empty-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -314,15 +314,15 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
       <path d="M7 9.5h10M7 13h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
     <h2>Nothing planned yet</h2>
-    <p>Add an issue below.</p>
+    <p>Add a task below.</p>
   </div>
 
   <div class="footer">
-    <button type="button" class="add-btn" id="add-issue">
+    <button type="button" class="add-btn" id="add-task">
       <svg viewBox="0 0 12 12" aria-hidden="true">
         <path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
       </svg>
-      Add issue
+      Add task
     </button>
   </div>
 
