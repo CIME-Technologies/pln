@@ -43,6 +43,7 @@
     "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "npm run compile -- --watch",
     "check": "tsc --noEmit",
+    "git": "git add . && printf 'Commit message [update]: ' && read msg && git commit -m \"${msg:-update}\" && git push",
     "test": "npm run compile && node --test test/plan.test.js"
   },
   "devDependencies": {

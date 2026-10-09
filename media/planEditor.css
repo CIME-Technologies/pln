@@ -6,7 +6,6 @@
   --bg-raised: var(--vscode-editorWidget-background, #202020);
   --bg-hover: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.12));
   --bg-active: color-mix(in srgb, var(--text) 10%, transparent);
-  --bg-group: color-mix(in srgb, var(--text) 4%, transparent);
   --bg-chip: color-mix(in srgb, var(--text) 7%, transparent);
 
   --border: var(--vscode-panel-border, color-mix(in srgb, var(--text) 15%, transparent));
@@ -218,88 +217,6 @@ button {
   background: var(--done);
 }
 
-/* ---------- Sections ---------- */
-
-.group-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: var(--row-h);
-  padding: 0 18px 0 24px;
-  background: var(--bg-group);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
-}
-
-.group-header:hover {
-  background: var(--bg-hover);
-}
-
-.group-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  cursor: default;
-}
-
-.chevron {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 auto;
-  color: var(--text-4);
-  transition: transform 140ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.group.collapsed .chevron {
-  transform: rotate(-90deg);
-}
-
-.group-donut {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  transform: rotate(-90deg);
-}
-
-.group-donut .ring-track {
-  fill: none;
-  stroke: var(--todo);
-  stroke-width: 2;
-  opacity: 0.45;
-}
-
-.group-donut .ring-fill {
-  fill: none;
-  stroke: var(--done);
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.group-name {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.012em;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: text;
-}
-
-.group-count {
-  flex: 0 0 auto;
-  min-width: 18px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- Icon buttons ---------- */
 
 .icon-btn {
@@ -325,7 +242,6 @@ button {
   color: var(--text);
 }
 
-.group-header:hover .icon-btn,
 .row:hover .icon-btn,
 .icon-btn:focus-visible {
   opacity: 1;
@@ -337,24 +253,52 @@ button {
   padding: 0;
 }
 
-.group.collapsed .rows {
-  display: none;
-}
-
 /* ---------- Issue rows ---------- */
 
 .row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   height: var(--row-h);
-  /* Indented so the status glyph sits on the same axis as the section ring. */
-  padding: 0 18px 0 41px;
+  /* padding-left is set per row from its nesting depth. */
+  padding-right: 18px;
   border-bottom: 1px solid var(--border);
 }
 
 .row:hover {
   background: var(--bg-hover);
+}
+
+.twisty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  color: var(--text-4);
+}
+
+.twisty svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+  transition: transform 140ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.twisty.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.twisty:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+/* A leaf keeps the gutter so every status glyph at a depth stays aligned. */
+.twisty.leaf {
+  visibility: hidden;
 }
 
 .status {
@@ -387,15 +331,6 @@ button {
 
 .status.done {
   color: var(--done);
-}
-
-.row-id {
-  flex: 0 0 auto;
-  min-width: 58px;
-  color: var(--text-4);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
 }
 
 .row-title {
@@ -433,11 +368,6 @@ button {
 .inline-input:focus,
 .inline-input:focus-visible {
   outline: none;
-}
-
-.group-main .inline-input {
-  font-weight: 600;
-  letter-spacing: -0.012em;
 }
 
 .hero-top .inline-input {

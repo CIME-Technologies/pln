@@ -1,37 +1,20 @@
-# Product Launch Plan
-Hello how are you?
-- [-] Hello
-- [x] Hello
+# Product Launch
+Everything required to prepare the product for public release.
 
-## Hello
-
-- [x] Define target audience
-- [x] Hello
-- [-] Review competitive landscape
-
-## Design
-
-- [ ] Map information architecture
-- [x] Hand off design tokens
-- [ ] Polish the empty states
-
-## Build
-
-- [ ] Hi how are you
-- [x] Implement onboarding flow
-- [ ] Integrate billing
-- [x] Run load tests
-
-## Launch
-
-- [x] Draft the announcement post
-- [x] Brief the support team
-- [x] Hello how are you
-
-## Hi!
-
-## Hello
-
-## Hi how's it going?
-
-## New section
+- [-] Research
+  - [x] Define target audience
+  - [-] Review competitive landscape
+    - [ ] Summarise the pricing study
+- [ ] Design
+  - [ ] Map information architecture
+  - [x] Hand off design tokens
+  - [ ] Polish the empty states
+- [-] Engineering
+  - [x] Set up the CI pipeline
+  - [-] Implement onboarding flow
+    - [x] Wire up the API
+    - [ ] Add the welcome screen
+  - [ ] Integrate billing
+- [ ] Launch
+  - [ ] Draft the announcement post
+  - [ ] Brief the support team

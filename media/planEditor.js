@@ -7,34 +7,27 @@
     meta: $("meta"),
     donut: $("donut"),
     pct: $("pct"),
-    sections: $("sections"),
+    list: $("issues"),
     empty: $("empty"),
-    addTask: $("add-task"),
-    addSection: $("add-section"),
+    addIssue: $("add-issue"),
   };
 
   const LABEL = { todo: "Todo", in_progress: "In Progress", done: "Done" };
   const ORDER = ["todo", "in_progress", "done"];
   const DONUT = 2 * Math.PI * 7;
-  const RING_R = 5.5;
-  const RING = 2 * Math.PI * RING_R;
-
-  /** Plan contents, ignoring the collapse key render() attaches to sections. */
-  const signature = (p) => JSON.stringify(p, (k, v) => (k === "key" ? undefined : v));
 
   const collapsed = new Set((vscode.getState() || {}).collapsed || []);
   const post = (m) => vscode.postMessage(m);
   const persist = () => vscode.setState({ collapsed: [...collapsed] });
 
-  let plan = { title: "Plan", description: "", tasks: [], sections: [] };
-  const allIssues = () => [...plan.tasks, ...plan.sections.flatMap((s) => s.issues)];
+  let plan = { title: "Plan", description: "", issues: [] };
   let menu = null;
-  /** Row line to edit, or "lastSection", once the next render contains it. */
+  /** A line to edit, or { childOf } to edit the newest child of that parent. */
   let focusAfterRender = null;
   /** The open inline input, if any. Renders are deferred while it exists. */
   let activeInput = null;
   let queuedPlan = null;
-  /** Signature of the plan currently on screen. */
+  /** The plan currently on screen, so identical pushes can be skipped. */
   let shown = "";
 
   /* ---------- icons ---------- */
@@ -56,6 +49,10 @@
     return svg(OUTLINE);
   }
 
+  const CHEVRON = svg(
+    `<path d="M3 4.5L6 7.5L9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+    "0 0 12 12"
+  );
   const PLUS = svg(
     `<path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`,
     "0 0 12 12"
@@ -77,20 +74,41 @@
     "0 0 12 12"
   );
 
-  /** "Product Launch Plan" -> "PLP", "Roadmap" -> "ROA". */
-  function issuePrefix(title) {
-    const words = title.match(/[A-Za-z]+/g) || [];
-    const key =
-      words.length === 1 ? words[0].slice(0, 3) : words.map((w) => w[0]).join("").slice(0, 3);
-    return (key || "PLN").toUpperCase();
-  }
-
   /* ---------- render ---------- */
+
+  /**
+   * Depth, child count and collapse key for every issue, in one pass. Collapse
+   * is keyed by title path rather than line, since any edit shifts the lines
+   * below it.
+   */
+  function layout(issues) {
+    const view = new Map();
+    const seen = new Map();
+
+    for (const issue of issues) {
+      const parent = issue.parent === null ? null : view.get(issue.parent);
+      let key = (parent ? parent.key + "/" : "") + issue.title;
+      const nth = (seen.get(key) || 0) + 1;
+      seen.set(key, nth);
+      if (nth > 1) {
+        key += `#${nth}`;
+      }
+      if (parent) {
+        parent.children += 1;
+      }
+      view.set(issue.line, { depth: parent ? parent.depth + 1 : 0, key, children: 0 });
+    }
+
+    for (const v of view.values()) {
+      v.collapsed = v.children > 0 && collapsed.has(v.key);
+    }
+    return view;
+  }
 
   function render() {
     closeMenu();
 
-    const issues = allIssues();
+    const issues = plan.issues;
     const done = issues.filter((i) => i.status === "done").length;
     const active = issues.filter((i) => i.status === "in_progress").length;
     const ratio = issues.length ? done / issues.length : 0;
@@ -107,135 +125,53 @@
       chip("done", done) +
       `<span class="chip">${issues.length} ${issues.length === 1 ? "issue" : "issues"}</span>`;
 
-    // Collapse state is keyed by title: any edit shifts the line numbers below it.
-    const seen = new Map();
-    const live = new Set();
-    for (const section of plan.sections) {
-      const nth = (seen.get(section.title) || 0) + 1;
-      seen.set(section.title, nth);
-      section.key = nth === 1 ? section.title : `${section.title}#${nth}`;
-      live.add(section.key);
-    }
+    const view = layout(issues);
 
-    // Forget deleted sections so a section that reuses the name starts expanded.
+    // Forget issues that are gone, so a re-created title starts expanded.
+    const live = new Set([...view.values()].map((v) => v.key));
     const stale = [...collapsed].filter((key) => !live.has(key));
     if (stale.length) {
       stale.forEach((key) => collapsed.delete(key));
       persist();
     }
 
-    const prefix = issuePrefix(plan.title);
-    let n = 0;
-    const nextId = () => `${prefix}-${++n}`;
+    el.list.innerHTML = "";
+    el.empty.classList.toggle("hidden", issues.length > 0);
 
-    el.sections.innerHTML = "";
-    el.empty.classList.toggle("hidden", issues.length > 0 || plan.sections.length > 0);
-    if (plan.tasks.length) {
-      el.sections.appendChild(rowList(plan.tasks, nextId));
+    let hideBelow = Infinity;
+    for (const issue of issues) {
+      const v = view.get(issue.line);
+      if (v.depth > hideBelow) {
+        continue;
+      }
+      hideBelow = v.collapsed ? v.depth : Infinity;
+      el.list.appendChild(renderRow(issue, v));
     }
-    for (const section of plan.sections) {
-      el.sections.appendChild(renderSection(section, nextId));
-    }
 
-    shown = signature(plan);
-  }
-
-  function rowList(issues, nextId) {
-    const list = document.createElement("ul");
-    list.className = "rows";
-    issues.forEach((issue) => list.appendChild(renderRow(issue, nextId())));
-    return list;
+    shown = JSON.stringify(plan);
   }
 
   const chip = (status, count) =>
     `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${LABEL[status]}</span>`;
 
-  function renderSection(section, nextId) {
-    const node = document.createElement("section");
-    const isCollapsed = collapsed.has(section.key);
-    node.className = "group" + (isCollapsed ? " collapsed" : "");
-
-    const done = section.issues.filter((i) => i.status === "done").length;
-    const ratio = section.issues.length ? done / section.issues.length : 0;
-
-    const main = document.createElement("div");
-    main.className = "group-main";
-    main.setAttribute("role", "button");
-    main.setAttribute("tabindex", "0");
-    main.setAttribute("aria-expanded", String(!isCollapsed));
-    main.innerHTML = `
-      <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M3 4.5L6 7.5L9 4.5" fill="none" stroke="currentColor" stroke-width="1.6"
-              stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <svg class="group-donut" viewBox="0 0 14 14" aria-hidden="true">
-        <circle class="ring-track" cx="7" cy="7" r="${RING_R}"/>
-        <circle class="ring-fill" cx="7" cy="7" r="${RING_R}"
-                stroke-dasharray="${RING}" stroke-dashoffset="${RING * (1 - ratio)}"/>
-      </svg>
-      <span class="group-name"></span>
-      <span class="group-count">${section.issues.length}</span>`;
-    main.querySelector(".group-name").textContent = section.title;
-
-    const toggle = () => {
-      if (main.querySelector("input")) {
-        return;
-      }
-      const next = !collapsed.has(section.key);
-      next ? collapsed.add(section.key) : collapsed.delete(section.key);
-      node.classList.toggle("collapsed", next);
-      main.setAttribute("aria-expanded", String(!next));
-      persist();
-    };
-    main.addEventListener("click", toggle);
-    // Only the header itself activates on keys; Space and Enter typed into the
-    // inline title input bubble up here and must reach the input intact.
-    main.addEventListener("keydown", (e) => {
-      if (e.target === main && (e.key === "Enter" || e.key === " ")) {
-        e.preventDefault();
-        toggle();
-      }
-    });
-
-    const name = main.querySelector(".group-name");
-    name.addEventListener("click", (e) => {
-      e.stopPropagation();
-      editSection(main, section);
-    });
-
-    const add = iconButton(PLUS, "Add issue", () => {
-      collapsed.delete(section.key);
-      persist();
-      const last = section.issues[section.issues.length - 1];
-      const after = last ? last.line : section.line;
-      focusAfterRender = after + 1;
-      post({ t: "addIssue", after });
-    });
-
-    const more = iconButton(DOTS, "Section options", () =>
-      openMenu(more, [
-        { label: "Rename section", icon: PENCIL, run: () => editSection(main, section) },
-        {
-          label: "Delete section",
-          icon: TRASH,
-          danger: true,
-          run: () => post({ t: "deleteSection", line: section.line }),
-        },
-      ])
-    );
-
-    const header = document.createElement("div");
-    header.className = "group-header";
-    header.append(main, add, more);
-
-    node.append(header, rowList(section.issues, nextId));
-    return node;
-  }
-
-  function renderRow(issue, id) {
+  function renderRow(issue, v) {
     const row = document.createElement("li");
     row.className = "row" + (issue.status === "done" ? " done" : "");
     row.dataset.line = issue.line;
+    row.style.paddingLeft = `${16 + v.depth * 20}px`;
+
+    const twisty = document.createElement("button");
+    twisty.type = "button";
+    twisty.className =
+      "twisty" + (v.children ? "" : " leaf") + (v.collapsed ? " collapsed" : "");
+    twisty.innerHTML = CHEVRON;
+    twisty.title = v.collapsed ? "Expand" : "Collapse";
+    twisty.setAttribute("aria-label", twisty.title);
+    twisty.addEventListener("click", () => {
+      v.collapsed ? collapsed.delete(v.key) : collapsed.add(v.key);
+      persist();
+      render();
+    });
 
     const status = document.createElement("button");
     status.type = "button";
@@ -246,14 +182,17 @@
       setStatus(issue, ORDER[(ORDER.indexOf(issue.status) + 1) % ORDER.length])
     );
 
-    const label = document.createElement("span");
-    label.className = "row-id";
-    label.textContent = id;
-
     const title = document.createElement("span");
-    title.className = "row-title" + (issue.text ? "" : " placeholder");
-    title.textContent = issue.text || "Untitled";
+    title.className = "row-title" + (issue.title ? "" : " placeholder");
+    title.textContent = issue.title || "Untitled";
     title.addEventListener("click", () => editIssue(row, issue));
+
+    const add = iconButton(PLUS, "Add sub-issue", () => {
+      collapsed.delete(v.key);
+      persist();
+      focusAfterRender = { childOf: issue.line };
+      post({ t: "addIssue", parent: issue.line });
+    });
 
     const more = iconButton(DOTS, "Issue options", () =>
       openMenu(more, [
@@ -275,7 +214,7 @@
       ])
     );
 
-    row.append(status, label, title, more);
+    row.append(twisty, status, title, add, more);
     return row;
   }
 
@@ -328,31 +267,16 @@
   }
 
   function editIssue(row, issue) {
-    edit(row.querySelector(".row-title"), issue.text, (value) => {
+    edit(row.querySelector(".row-title"), issue.title, (value) => {
       if (!value) {
         post({ t: "deleteIssue", line: issue.line });
         return true;
       }
-      if (value === issue.text) {
+      if (value === issue.title) {
         return false;
       }
-      issue.text = value;
+      issue.title = value;
       post({ t: "text", line: issue.line, text: value });
-      return true;
-    });
-  }
-
-  function editSection(main, section) {
-    edit(main.querySelector(".group-name"), section.title, (value) => {
-      if (!value || value === section.title) {
-        return false;
-      }
-      if (collapsed.delete(section.key)) {
-        collapsed.add(value);
-        persist();
-      }
-      section.title = value;
-      post({ t: "renameSection", line: section.line, title: value });
       return true;
     });
   }
@@ -411,20 +335,14 @@
     if (focusAfterRender === null) {
       return;
     }
-    if (focusAfterRender === "lastSection") {
-      const last = el.sections.querySelector("section:last-of-type");
-      const section = plan.sections[plan.sections.length - 1];
-      if (last && section) {
-        editSection(last.querySelector(".group-main"), section);
-      }
-      return;
-    }
-    if (focusAfterRender === "lastTask") {
-      const last = plan.tasks[plan.tasks.length - 1];
+    if (typeof focusAfterRender === "object") {
+      // The issue we just asked for is the newest child of that parent.
+      const siblings = plan.issues.filter((i) => i.parent === focusAfterRender.childOf);
+      const last = siblings[siblings.length - 1];
       focusAfterRender = last ? last.line : null;
     }
-    const row = el.sections.querySelector(`.row[data-line="${focusAfterRender}"]`);
-    const issue = allIssues().find((i) => i.line === focusAfterRender);
+    const row = el.list.querySelector(`.row[data-line="${focusAfterRender}"]`);
+    const issue = plan.issues.find((i) => i.line === focusAfterRender);
     if (row && issue) {
       editIssue(row, issue);
     }
@@ -485,14 +403,9 @@
   el.title.addEventListener("click", editTitle);
   el.description.addEventListener("click", editDescription);
 
-  el.addTask.addEventListener("click", () => {
-    focusAfterRender = "lastTask";
-    post({ t: "addTask" });
-  });
-
-  el.addSection.addEventListener("click", () => {
-    focusAfterRender = "lastSection";
-    post({ t: "addSection" });
+  el.addIssue.addEventListener("click", () => {
+    focusAfterRender = { childOf: null };
+    post({ t: "addIssue", parent: null });
   });
 
   document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
@@ -505,7 +418,7 @@
     }
     // Redrawing identical content would still replace every node, throwing away
     // the hover state of whatever the pointer is resting on.
-    if (signature(e.data) === shown) {
+    if (JSON.stringify(e.data) === shown) {
       return;
     }
     plan = e.data;
