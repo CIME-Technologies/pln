@@ -3,6 +3,7 @@ src/**
 test/**
 examples/**
 docs/screenshot.png
+docs/demo.gif
 .vscode/**
 tsconfig.json
 package-lock.json
