@@ -1,3 +1,7 @@
+/**
+ * Webview UI for the Plan custom editor.
+ * Receives a Plan from the extension host and posts mutations back as messages.
+ */
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
@@ -14,6 +18,7 @@
 
   const LABEL = { todo: "Todo", in_progress: "In Progress", done: "Done" };
   const ORDER = ["todo", "in_progress", "done"];
+  /** Circumference of the hero progress ring (r = 7). */
   const DONUT = 2 * Math.PI * 7;
 
   const collapsed = new Set((vscode.getState() || {}).collapsed || []);
@@ -22,21 +27,35 @@
 
   let plan = { title: "Plan", description: "", tasks: [] };
   let menu = null;
-  /** A line to edit, or { childOf } to edit the newest child of that parent. */
+  /**
+   * After the next document push, start editing this task.
+   * Either a line number, or `{ childOf }` for the newest child of that parent.
+   * @type {number|{childOf: number|null}|null}
+   */
   let focusAfterRender = null;
-  /** The open inline input, if any. Renders are deferred while it exists. */
+  /** Open inline `<input>`, if any. Document pushes are deferred while set. */
   let activeInput = null;
+  /** Plan received while `activeInput` is open; applied on commit/cancel. */
   let queuedPlan = null;
-  /** The plan currently on screen, so identical pushes can be skipped. */
+  /** JSON of the plan currently painted; identical pushes skip a redraw. */
   let shown = "";
 
   /* ---------- icons ---------- */
 
+  /**
+   * @param {string} inner
+   * @param {string} [box]
+   * @returns {string}
+   */
   const svg = (inner, box = "0 0 14 14") =>
     `<svg viewBox="${box}" aria-hidden="true">${inner}</svg>`;
 
   const OUTLINE = `<circle cx="7" cy="7" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>`;
 
+  /**
+   * @param {"todo"|"in_progress"|"done"} status
+   * @returns {string}
+   */
   function statusIcon(status) {
     if (status === "done") {
       return svg(`<circle cx="7" cy="7" r="7" fill="currentColor"/>
@@ -77,9 +96,10 @@
   /* ---------- render ---------- */
 
   /**
-   * Depth, child count and collapse key for every task, in one pass. Collapse
-   * is keyed by title path rather than line, since any edit shifts the lines
-   * below it.
+   * Compute depth, child count, and collapse key for each task.
+   * Keys use the title path so collapse survives line shifts.
+   * @param {Array<{line: number, title: string, parent: number|null}>} tasks
+   * @returns {Map<number, {depth: number, key: string, children: number, collapsed?: boolean}>}
    */
   function layout(tasks) {
     const view = new Map();
@@ -105,6 +125,7 @@
     return view;
   }
 
+  /** Paint the current `plan` into the DOM. */
   function render() {
     closeMenu();
 
@@ -113,7 +134,8 @@
     const active = tasks.filter((i) => i.status === "in_progress").length;
     const ratio = tasks.length ? done / tasks.length : 0;
 
-    el.title.textContent = plan.title;
+    el.title.textContent = plan.title || "Untitled";
+    el.title.classList.toggle("placeholder", !plan.title);
     el.description.textContent = plan.description || "Add a description…";
     el.description.classList.toggle("placeholder", !plan.description);
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
@@ -127,7 +149,6 @@
 
     const view = layout(tasks);
 
-    // Forget tasks that are gone, so a re-created title starts expanded.
     const live = new Set([...view.values()].map((v) => v.key));
     const stale = [...collapsed].filter((key) => !live.has(key));
     if (stale.length) {
@@ -151,9 +172,19 @@
     shown = JSON.stringify(plan);
   }
 
+  /**
+   * @param {string} status
+   * @param {number} count
+   * @returns {string}
+   */
   const chip = (status, count) =>
     `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${LABEL[status]}</span>`;
 
+  /**
+   * @param {{line: number, title: string, status: string}} task
+   * @param {{depth: number, key: string, children: number, collapsed?: boolean}} v
+   * @returns {HTMLLIElement}
+   */
   function renderRow(task, v) {
     const row = document.createElement("li");
     row.className = "row" + (task.status === "done" ? " done" : "");
@@ -218,6 +249,12 @@
     return row;
   }
 
+  /**
+   * @param {string} icon
+   * @param {string} label
+   * @param {() => void} run
+   * @returns {HTMLButtonElement}
+   */
   function iconButton(icon, label, run) {
     const button = document.createElement("button");
     button.type = "button";
@@ -235,8 +272,9 @@
   /* ---------- editing ---------- */
 
   /**
-   * Paint the new status straight away instead of waiting out the provider's
-   * debounce. The document stays authoritative: its next push overwrites this.
+   * Update status in the local plan immediately, then ask the host to write it.
+   * @param {{line: number, status: string}} task
+   * @param {string} status
    */
   function setStatus(task, status) {
     task.status = status;
@@ -244,9 +282,10 @@
     post({ t: "status", line: task.line, status });
   }
 
+  /** Begin editing the project title. */
   function editTitle() {
     edit(el.title, plan.title, (value) => {
-      if (!value || value === plan.title) {
+      if (value === plan.title) {
         return false;
       }
       plan.title = value;
@@ -255,6 +294,7 @@
     });
   }
 
+  /** Begin editing the project description. */
   function editDescription() {
     edit(el.description, plan.description, (value) => {
       if (value === plan.description) {
@@ -266,6 +306,11 @@
     });
   }
 
+  /**
+   * Begin editing a task title. An empty commit deletes the task.
+   * @param {HTMLElement} row
+   * @param {{line: number, title: string}} task
+   */
   function editTask(row, task) {
     edit(row.querySelector(".row-title"), task.title, (value) => {
       if (!value) {
@@ -282,9 +327,10 @@
   }
 
   /**
-   * Swap a label for an input until the user commits or cancels. `commit`
-   * applies the change locally and reports whether it also changed the
-   * document, so the matching push back from the provider is a no-op.
+   * Replace a label with an `<input>` until Enter/blur (commit) or Escape (cancel).
+   * @param {HTMLElement|null} label
+   * @param {string} initial
+   * @param {(value: string) => boolean} commit Return true if a host message was posted.
    */
   function edit(label, initial, commit) {
     if (!label || activeInput) {
@@ -313,7 +359,7 @@
       input.replaceWith(label);
 
       if (save && commit(input.value.trim())) {
-        queuedPlan = null; // our edit supersedes anything that arrived meanwhile
+        queuedPlan = null;
       } else if (queuedPlan) {
         plan = queuedPlan;
         queuedPlan = null;
@@ -331,12 +377,12 @@
     });
   }
 
+  /** Start editing the task indicated by `focusAfterRender`, if present. */
   function applyFocus() {
     if (focusAfterRender === null) {
       return;
     }
     if (typeof focusAfterRender === "object") {
-      // The task we just asked for is the newest child of that parent.
       const siblings = plan.tasks.filter((i) => i.parent === focusAfterRender.childOf);
       const last = siblings[siblings.length - 1];
       focusAfterRender = last ? last.line : null;
@@ -350,6 +396,10 @@
 
   /* ---------- menu ---------- */
 
+  /**
+   * @param {HTMLElement} anchor
+   * @param {Array<{separator?: boolean, label?: string, icon?: string, iconClass?: string, selected?: boolean, danger?: boolean, run?: () => void}>} items
+   */
   function openMenu(anchor, items) {
     closeMenu();
     menu = document.createElement("div");
@@ -384,6 +434,7 @@
     setTimeout(() => document.addEventListener("mousedown", onOutsideClick, true));
   }
 
+  /** @param {MouseEvent} e */
   function onOutsideClick(e) {
     if (!menu.contains(e.target)) {
       closeMenu();
@@ -411,19 +462,16 @@
   document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
 
   window.addEventListener("message", (e) => {
-    // Redrawing would destroy an open input along with its focus and selection.
     if (activeInput) {
       queuedPlan = e.data;
       return;
     }
-    // Redrawing identical content would still replace every node, throwing away
-    // the hover state of whatever the pointer is resting on.
     if (JSON.stringify(e.data) === shown) {
       return;
     }
     plan = e.data;
     render();
-    applyFocus(); // only a document update can contain the row we asked to edit
+    applyFocus();
     focusAfterRender = null;
   });
 

@@ -3,12 +3,12 @@
   "displayName": "Plan (.pln)",
   "description": "Visual project list editor for .pln plan files",
   "version": "0.1.0",
-  "publisher": "emanuelaromano",
+  "publisher": "CIME-Technologies",
   "license": "MIT",
   "icon": "docs/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/emanuelaromano/pln.git"
+    "url": "https://github.com/CIME-Technologies/pln.git"
   },
   "engines": {
     "vscode": "^1.85.0"

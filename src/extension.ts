@@ -2,34 +2,43 @@ import { randomUUID } from "crypto";
 import * as path from "path";
 import * as vscode from "vscode";
 
+/** Task checkbox state written as `[ ]`, `[-]`, or `[x]`. */
 export type Status = "todo" | "in_progress" | "done";
 
+/** One checkbox line in a `.pln` file. */
 export interface Task {
+  /** 0-based line in the document. */
   line: number;
   title: string;
   status: Status;
-  /** Line of the parent task, or null for a top-level task. */
+  /** Parent task's line, or `null` for a top-level task. */
   parent: number | null;
 }
 
+/** Parsed contents of a `.pln` document. */
 export interface Plan {
   title: string;
+  /** Line of the `#` heading, or `-1` if absent. */
   titleLine: number;
   description: string;
+  /** Line of the description prose, or `-1` if absent. */
   descriptionLine: number;
-  /** Document order; a subtask always follows its parent. */
+  /** Document order; each subtask follows its parent. */
   tasks: Task[];
 }
 
 const TASK = /^[ \t]*[-*+][ \t]+\[([ xX-])\](?:[ \t]+(.*))?$/;
 const TITLE = /^#[ \t]+(.+)$/;
-/** Written indentation per level; any consistent indentation is accepted. */
+/** Canonical indent written for each nesting level. */
 const INDENT = "  ";
 
 const TOKEN: Record<Status, string> = { todo: " ", in_progress: "-", done: "x" };
+
+/** @param token Character inside `[…]`. */
 const statusOf = (token: string): Status =>
   token === "-" ? "in_progress" : token === " " ? "todo" : "done";
 
+/** Leading whitespace width (`tab` counts as 2). */
 function indentOf(raw: string): number {
   let n = 0;
   for (const ch of raw) {
@@ -44,16 +53,20 @@ function indentOf(raw: string): number {
   return n;
 }
 
-export function parsePlan(text: string, fallbackTitle: string): Plan {
+/**
+ * Parse a `.pln` file into a {@link Plan}.
+ * Indentation defines parent/child; `#` is the title; first prose before tasks is the description.
+ * @param _fallbackTitle Unused; kept so call sites stay stable. Missing titles are `""`.
+ */
+export function parsePlan(text: string, _fallbackTitle = ""): Plan {
   const plan: Plan = {
-    title: fallbackTitle,
+    title: "",
     titleLine: -1,
     description: "",
     descriptionLine: -1,
     tasks: [],
   };
-  // Open ancestors, shallowest first. The parent of a line is the nearest
-  // preceding task indented less than it, whatever indent width the file uses.
+  /** Open ancestors, shallowest first — parent is the nearest less-indented task. */
   const open: { indent: number; line: number }[] = [];
 
   text.split(/\r?\n/).forEach((raw, i) => {
@@ -78,13 +91,10 @@ export function parsePlan(text: string, fallbackTitle: string): Plan {
       plan.titleLine = i;
       return;
     }
-    // The description is the first prose line under the title, before the
-    // first task opens the body of the plan.
     const prose = raw.trim();
     if (
       prose &&
       !prose.startsWith("#") &&
-      plan.titleLine >= 0 &&
       plan.descriptionLine < 0 &&
       !plan.tasks.length
     ) {
@@ -96,7 +106,7 @@ export function parsePlan(text: string, fallbackTitle: string): Plan {
   return plan;
 }
 
-/** Every task below `line`, in document order. */
+/** Descendants of `line` in document order (not including the task itself). */
 function descendants(plan: Plan, line: number): Task[] {
   const inside = new Set([line]);
   return plan.tasks.filter((task) => {
@@ -108,7 +118,7 @@ function descendants(plan: Plan, line: number): Task[] {
   });
 }
 
-/** Nesting depth of every task, keyed by line. */
+/** Nesting depth of each task, keyed by line. */
 function depths(plan: Plan): Map<number, number> {
   const depth = new Map<number, number>();
   for (const task of plan.tasks) {
@@ -117,7 +127,10 @@ function depths(plan: Plan): Map<number, number> {
   return depth;
 }
 
-/** Range covering lines [from, to] including the newline that attaches them. */
+/**
+ * Document range covering lines `[from, to]`, including the attaching newline.
+ * Deleting that range removes the block cleanly whether or not it ends the file.
+ */
 function lineSpan(doc: vscode.TextDocument, from: number, to: number): vscode.Range {
   if (to < doc.lineCount - 1) {
     return new vscode.Range(from, 0, to + 1, 0);
@@ -126,6 +139,7 @@ function lineSpan(doc: vscode.TextDocument, from: number, to: number): vscode.Ra
   return new vscode.Range(start, doc.lineAt(to).range.end);
 }
 
+/** Custom text editor that syncs a `.pln` {@link Plan} with the webview UI. */
 class PlanEditor implements vscode.CustomTextEditorProvider {
   constructor(private readonly root: vscode.Uri) {}
 
@@ -151,7 +165,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
       clearTimeout(timer);
       sub.dispose();
     });
-    // A rejected edit produces no change event, so resync the webview itself.
+    // Rejected edits produce no change event — push the current plan anyway.
     panel.webview.onDidReceiveMessage(async (m) => {
       if (m.t === "ready" || !(await this.edit(doc, m))) {
         send();
@@ -159,6 +173,10 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     });
   }
 
+  /**
+   * Apply a webview message as a {@link vscode.WorkspaceEdit}.
+   * @returns `false` if the message was rejected (webview should resync).
+   */
   private async edit(doc: vscode.TextDocument, m: any): Promise<boolean> {
     if (m.t === "deleteTask") {
       return this.deleteTask(doc, m.line);
@@ -170,10 +188,15 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
 
     switch (m.t) {
       case "title": {
-        if (!m.text.trim()) {
-          return false;
+        const text = m.text.trim();
+        if (!text) {
+          if (plan.titleLine < 0) {
+            return false;
+          }
+          edit.delete(doc.uri, lineSpan(doc, plan.titleLine, plan.titleLine));
+          break;
         }
-        const heading = `# ${m.text.trim()}`;
+        const heading = `# ${text}`;
         if (plan.titleLine < 0) {
           edit.insert(doc.uri, new vscode.Position(0, 0), `${heading}\n\n`);
         } else {
@@ -192,6 +215,8 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
           }
         } else if (text && plan.titleLine >= 0) {
           edit.insert(doc.uri, at(plan.titleLine).range.end, `\n${text}`);
+        } else if (text) {
+          edit.insert(doc.uri, new vscode.Position(0, 0), `${text}\n`);
         } else {
           return false;
         }
@@ -203,7 +228,6 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
           edit.insert(doc.uri, last.range.end, `${last.text.trim() ? "\n" : ""}- [ ]`);
           break;
         }
-        // A subtask goes after everything already nested under its parent.
         const below = descendants(plan, m.parent);
         const after = below.length ? below[below.length - 1].line : m.parent;
         const depth = (depths(plan).get(m.parent) ?? 0) + 1;
@@ -248,7 +272,10 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     return vscode.workspace.applyEdit(edit);
   }
 
-  /** Deletes a task together with everything nested under it. */
+  /**
+   * Delete a task and its descendants.
+   * Confirms first when the task has subtasks.
+   */
   private async deleteTask(doc: vscode.TextDocument, line: number): Promise<boolean> {
     const plan = parsePlan(doc.getText(), "");
     const task = plan.tasks.find((i) => i.line === line);
@@ -274,9 +301,9 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     edit.delete(doc.uri, lineSpan(doc, line, end));
     return vscode.workspace.applyEdit(edit);
   }
-
 }
 
+/** HTML shell for the plan webview (assets loaded from `media/`). */
 function page(webview: vscode.Webview, media: vscode.Uri): string {
   const nonce = randomUUID();
   const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(media, file));
@@ -331,6 +358,7 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
 </html>`;
 }
 
+/** Register the Plan custom editor. */
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(

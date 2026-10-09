@@ -30,7 +30,7 @@ project title and the line under it is the description.
 ## Install
 
 Search for **Plan (.pln) ** in the VS Code Extensions view, or install it from the
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=emanuelaromano.pln).
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=CIME-Technologies.pln).
 
 ## Usage
 
@@ -56,7 +56,7 @@ This is version 0.1.0, an early release. It covers tasks, subtasks, statuses,
 renaming, and deletion. Anything else you put in a `.pln` file is left untouched
 but is not shown in the editor.
 
-Issues and feedback: <https://github.com/emanuelaromano/pln/issues>
+Issues and feedback: <https://github.com/CIME-Technologies/pln/issues>
 
 ## License
 

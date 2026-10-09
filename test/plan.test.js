@@ -184,8 +184,9 @@ test("a task carries only a title, a status, and a parent", () => {
   ]);
 });
 
-test("falls back to the file name when there is no title", () => {
-  assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").title, "my-plan");
+test("a missing title is empty rather than invented from the file name", () => {
+  assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").title, "");
+  assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").titleLine, -1);
 });
 
 test("nests subtasks several levels deep", () => {
@@ -243,7 +244,7 @@ test("leaves the description empty when there is none", () => {
 
 test("handles empty and malformed content without throwing", () => {
   assert.deepStrictEqual(parsePlan("", "empty"), {
-    title: "empty",
+    title: "",
     titleLine: -1,
     description: "",
     descriptionLine: -1,
@@ -503,10 +504,20 @@ test("adds a title to a file that has none", () => {
   assert.strictEqual(ed.text, "# Named\n\n- [ ] a\n");
 });
 
-test("refuses to blank the title", () => {
+test("clearing the title removes its heading and shows as untitled", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "title", text: "   " });
-  assert.strictEqual(ed.text, SAMPLE);
+  assert.strictEqual(ed.text, "A short plan.\n\n- [ ] Alpha\n  - [ ] one\n  - [x] two\n- [-] Omega\n  - [-] three\n");
+  const plan = parsePlan(ed.text, "x");
+  assert.strictEqual(plan.title, "");
+  assert.strictEqual(plan.titleLine, -1);
+  assert.strictEqual(plan.description, "A short plan.");
+});
+
+test("clearing an absent title is a no-op", () => {
+  const ed = open("- [ ] a\n");
+  ed.send({ t: "title", text: "" });
+  assert.strictEqual(ed.text, "- [ ] a\n");
 });
 
 test("writes a description under the title when there is none", () => {
