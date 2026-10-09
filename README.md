@@ -1,4 +1,4 @@
-# Plan (.pln)
+# Plan: .pln Editor
 
 Open a plan file as a task list instead of raw markdown. A `.pln` file is just
 markdown with checkboxes: every checkbox line is a task you can click through
@@ -44,7 +44,8 @@ the underlying markdown at any point, use **Reopen Editor With… → Text Edito
 - **Change a status** by clicking its circle, which cycles todo → in progress →
   done. The task menu (`⋯`) sets a status directly.
 - **Rename** by clicking a task's title, or the project title or description.
-  Clearing a task's title deletes it.
+  Clearing a task's title deletes it. Clearing the project title removes the
+  `#` heading from the file and shows **Untitled** in the editor.
 - **Delete** from the `⋯` menu. Deleting a task that has subtasks asks first
   and then removes the whole branch.
 - **Collapse** a task by clicking its chevron. Collapsed tasks are remembered
@@ -52,11 +53,23 @@ the underlying markdown at any point, use **Reopen Editor With… → Text Edito
 
 ## Early release
 
-This is version 0.1.0, an early release. It covers tasks, subtasks, statuses,
+This is version 0.1.1, an early release. It covers tasks, subtasks, statuses,
 renaming, and deletion. Anything else you put in a `.pln` file is left untouched
 but is not shown in the editor.
 
 Issues and feedback: <https://github.com/CIME-Technologies/pln/issues>
+
+## Development
+
+```bash
+npm install
+npm test
+npm run check
+npm run compile
+```
+
+To launch the extension locally, open the project in VS Code and press F5
+(or **Run and Debug → Run Extension**).
 
 ## License
 
