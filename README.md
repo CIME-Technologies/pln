@@ -29,8 +29,8 @@ project title and the line under it is the description.
 
 ## Install
 
-Search for **Plan (.pln) ** in the VS Code Extensions view, or install it from the
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=CIME-Technologies.pln).
+Search for **Plan: .pln Editor** in the VS Code Extensions view, or install it from the
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=CIME-Technologies.pln-files).
 
 ## Usage
 
