@@ -518,15 +518,15 @@ button {
 /* ---------- Empty state ---------- */
 
 .empty {
-  padding: 72px 24px;
+  padding: 32px 24px;
   text-align: center;
   color: var(--text-3);
 }
 
 .empty-icon {
-  width: 34px;
-  height: 34px;
-  margin: 0 auto 14px;
+  width: 26px;
+  height: 26px;
+  margin: 0 auto 10px;
   color: var(--text-4);
 }
 
