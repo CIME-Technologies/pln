@@ -3,11 +3,13 @@
   const $ = (id) => document.getElementById(id);
   const el = {
     title: $("title"),
+    description: $("description"),
     meta: $("meta"),
     donut: $("donut"),
     pct: $("pct"),
     sections: $("sections"),
     empty: $("empty"),
+    addTask: $("add-task"),
     addSection: $("add-section"),
   };
 
@@ -17,17 +19,23 @@
   const RING_R = 5.5;
   const RING = 2 * Math.PI * RING_R;
 
+  /** Plan contents, ignoring the collapse key render() attaches to sections. */
+  const signature = (p) => JSON.stringify(p, (k, v) => (k === "key" ? undefined : v));
+
   const collapsed = new Set((vscode.getState() || {}).collapsed || []);
   const post = (m) => vscode.postMessage(m);
   const persist = () => vscode.setState({ collapsed: [...collapsed] });
 
-  let plan = { title: "Plan", sections: [] };
+  let plan = { title: "Plan", description: "", tasks: [], sections: [] };
+  const allIssues = () => [...plan.tasks, ...plan.sections.flatMap((s) => s.issues)];
   let menu = null;
   /** Row line to edit, or "lastSection", once the next render contains it. */
   let focusAfterRender = null;
   /** The open inline input, if any. Renders are deferred while it exists. */
   let activeInput = null;
   let queuedPlan = null;
+  /** Signature of the plan currently on screen. */
+  let shown = "";
 
   /* ---------- icons ---------- */
 
@@ -82,12 +90,14 @@
   function render() {
     closeMenu();
 
-    const issues = plan.sections.flatMap((s) => s.issues);
+    const issues = allIssues();
     const done = issues.filter((i) => i.status === "done").length;
     const active = issues.filter((i) => i.status === "in_progress").length;
     const ratio = issues.length ? done / issues.length : 0;
 
     el.title.textContent = plan.title;
+    el.description.textContent = plan.description || "Add a description…";
+    el.description.classList.toggle("placeholder", !plan.description);
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
     el.donut.setAttribute("stroke-dasharray", DONUT);
     el.donut.setAttribute("stroke-dashoffset", DONUT * (1 - ratio));
@@ -116,12 +126,25 @@
 
     const prefix = issuePrefix(plan.title);
     let n = 0;
+    const nextId = () => `${prefix}-${++n}`;
+
     el.sections.innerHTML = "";
-    el.empty.classList.toggle("hidden", plan.sections.length > 0);
+    el.empty.classList.toggle("hidden", issues.length > 0 || plan.sections.length > 0);
+    if (plan.tasks.length) {
+      el.sections.appendChild(rowList(plan.tasks, nextId));
+    }
     for (const section of plan.sections) {
-      el.sections.appendChild(renderSection(section, () => `${prefix}-${++n}`));
+      el.sections.appendChild(renderSection(section, nextId));
     }
 
+    shown = signature(plan);
+  }
+
+  function rowList(issues, nextId) {
+    const list = document.createElement("ul");
+    list.className = "rows";
+    issues.forEach((issue) => list.appendChild(renderRow(issue, nextId())));
+    return list;
   }
 
   const chip = (status, count) =>
@@ -165,11 +188,19 @@
       persist();
     };
     main.addEventListener("click", toggle);
+    // Only the header itself activates on keys; Space and Enter typed into the
+    // inline title input bubble up here and must reach the input intact.
     main.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
+      if (e.target === main && (e.key === "Enter" || e.key === " ")) {
         e.preventDefault();
         toggle();
       }
+    });
+
+    const name = main.querySelector(".group-name");
+    name.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editSection(main, section);
     });
 
     const add = iconButton(PLUS, "Add issue", () => {
@@ -197,11 +228,7 @@
     header.className = "group-header";
     header.append(main, add, more);
 
-    const list = document.createElement("ul");
-    list.className = "rows";
-    section.issues.forEach((issue) => list.appendChild(renderRow(issue, nextId())));
-
-    node.append(header, list);
+    node.append(header, rowList(section.issues, nextId));
     return node;
   }
 
@@ -226,6 +253,7 @@
     const title = document.createElement("span");
     title.className = "row-title" + (issue.text ? "" : " placeholder");
     title.textContent = issue.text || "Untitled";
+    title.addEventListener("click", () => editIssue(row, issue));
 
     const more = iconButton(DOTS, "Issue options", () =>
       openMenu(more, [
@@ -277,19 +305,39 @@
     post({ t: "status", line: issue.line, status });
   }
 
+  function editTitle() {
+    edit(el.title, plan.title, (value) => {
+      if (!value || value === plan.title) {
+        return false;
+      }
+      plan.title = value;
+      post({ t: "title", text: value });
+      return true;
+    });
+  }
+
+  function editDescription() {
+    edit(el.description, plan.description, (value) => {
+      if (value === plan.description) {
+        return false;
+      }
+      plan.description = value;
+      post({ t: "description", text: value });
+      return true;
+    });
+  }
+
   function editIssue(row, issue) {
-    edit(row.querySelector(".row-title"), issue.text, (value, viaEnter) => {
+    edit(row.querySelector(".row-title"), issue.text, (value) => {
       if (!value) {
         post({ t: "deleteIssue", line: issue.line });
         return true;
       }
-      if (value === issue.text && !viaEnter) {
+      if (value === issue.text) {
         return false;
       }
-      if (viaEnter) {
-        focusAfterRender = issue.line + 1;
-      }
-      post({ t: "text", line: issue.line, text: value, addAfter: viaEnter });
+      issue.text = value;
+      post({ t: "text", line: issue.line, text: value });
       return true;
     });
   }
@@ -303,17 +351,19 @@
         collapsed.add(value);
         persist();
       }
+      section.title = value;
       post({ t: "renameSection", line: section.line, title: value });
       return true;
     });
   }
 
   /**
-   * Swap a label for an input. `commit` reports whether it changed the
-   * document; if it did, the resulting update redraws the label for us.
+   * Swap a label for an input until the user commits or cancels. `commit`
+   * applies the change locally and reports whether it also changed the
+   * document, so the matching push back from the provider is a no-op.
    */
   function edit(label, initial, commit) {
-    if (!label) {
+    if (!label || activeInput) {
       return;
     }
     closeMenu();
@@ -330,19 +380,17 @@
     activeInput = input;
 
     let settled = false;
-    const finish = (save, viaEnter) => {
+    const finish = (save) => {
       if (settled) {
         return;
       }
       settled = true;
       activeInput = null;
+      input.replaceWith(label);
 
-      // A commit changes the document, and that update redraws the label.
-      if (save && commit(input.value.trim(), viaEnter)) {
-        queuedPlan = null;
-        return;
-      }
-      if (queuedPlan) {
+      if (save && commit(input.value.trim())) {
+        queuedPlan = null; // our edit supersedes anything that arrived meanwhile
+      } else if (queuedPlan) {
         plan = queuedPlan;
         queuedPlan = null;
       }
@@ -350,11 +398,11 @@
     };
 
     input.addEventListener("click", (e) => e.stopPropagation());
-    input.addEventListener("blur", () => finish(true, false));
+    input.addEventListener("blur", () => finish(true));
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === "Escape") {
         e.preventDefault();
-        finish(e.key === "Enter", e.key === "Enter");
+        finish(e.key === "Enter");
       }
     });
   }
@@ -364,16 +412,19 @@
       return;
     }
     if (focusAfterRender === "lastSection") {
-      const last = el.sections.lastElementChild;
-      if (last) {
-        editSection(last.querySelector(".group-main"), plan.sections[plan.sections.length - 1]);
+      const last = el.sections.querySelector("section:last-of-type");
+      const section = plan.sections[plan.sections.length - 1];
+      if (last && section) {
+        editSection(last.querySelector(".group-main"), section);
       }
       return;
     }
+    if (focusAfterRender === "lastTask") {
+      const last = plan.tasks[plan.tasks.length - 1];
+      focusAfterRender = last ? last.line : null;
+    }
     const row = el.sections.querySelector(`.row[data-line="${focusAfterRender}"]`);
-    const issue = plan.sections
-      .flatMap((s) => s.issues)
-      .find((i) => i.line === focusAfterRender);
+    const issue = allIssues().find((i) => i.line === focusAfterRender);
     if (row && issue) {
       editIssue(row, issue);
     }
@@ -431,6 +482,14 @@
 
   /* ---------- wiring ---------- */
 
+  el.title.addEventListener("click", editTitle);
+  el.description.addEventListener("click", editDescription);
+
+  el.addTask.addEventListener("click", () => {
+    focusAfterRender = "lastTask";
+    post({ t: "addTask" });
+  });
+
   el.addSection.addEventListener("click", () => {
     focusAfterRender = "lastSection";
     post({ t: "addSection" });
@@ -442,6 +501,11 @@
     // Redrawing would destroy an open input along with its focus and selection.
     if (activeInput) {
       queuedPlan = e.data;
+      return;
+    }
+    // Redrawing identical content would still replace every node, throwing away
+    // the hover state of whatever the pointer is resting on.
+    if (signature(e.data) === shown) {
       return;
     }
     plan = e.data;

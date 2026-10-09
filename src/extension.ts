@@ -18,40 +18,71 @@ export interface Section {
 
 export interface Plan {
   title: string;
+  titleLine: number;
+  description: string;
+  descriptionLine: number;
+  /** Tasks that sit above the first section. */
+  tasks: Issue[];
   sections: Section[];
 }
 
 const ISSUE = /^[ \t]*[-*+][ \t]+\[([ xX-])\](?:[ \t]+(.*))?$/;
 const SECTION = /^##[ \t]+(.+)$/;
+const TITLE = /^#[ \t]+(.+)$/;
 
 const TOKEN: Record<Status, string> = { todo: " ", in_progress: "-", done: "x" };
 const statusOf = (token: string): Status =>
   token === "-" ? "in_progress" : token === " " ? "todo" : "done";
 
 export function parsePlan(text: string, fallbackTitle: string): Plan {
-  const heading = /^#[ \t]+(.+)$/m.exec(text);
-  const sections: Section[] = [];
+  const plan: Plan = {
+    title: fallbackTitle,
+    titleLine: -1,
+    description: "",
+    descriptionLine: -1,
+    tasks: [],
+    sections: [],
+  };
 
-  text.split(/\r?\n/).forEach((line, i) => {
-    const section = SECTION.exec(line);
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const section = SECTION.exec(raw);
     if (section) {
-      sections.push({ title: section[1].trim(), line: i, issues: [] });
+      plan.sections.push({ title: section[1].trim(), line: i, issues: [] });
       return;
     }
-    const issue = ISSUE.exec(line);
+    const issue = ISSUE.exec(raw);
     if (issue) {
-      if (sections.length === 0) {
-        sections.push({ title: "Issues", line: i, issues: [] });
-      }
-      sections[sections.length - 1].issues.push({
+      const last = plan.sections[plan.sections.length - 1];
+      (last ? last.issues : plan.tasks).push({
         line: i,
         text: issue[2] ?? "",
         status: statusOf(issue[1]),
       });
+      return;
+    }
+    const title = TITLE.exec(raw);
+    if (title && plan.titleLine < 0) {
+      plan.title = title[1].trim();
+      plan.titleLine = i;
+      return;
+    }
+    // The description is the first prose line under the title, before any task
+    // or section opens the body of the plan.
+    const text = raw.trim();
+    if (
+      text &&
+      !text.startsWith("#") &&
+      plan.titleLine >= 0 &&
+      plan.descriptionLine < 0 &&
+      !plan.tasks.length &&
+      !plan.sections.length
+    ) {
+      plan.description = text;
+      plan.descriptionLine = i;
     }
   });
 
-  return { title: heading ? heading[1].trim() : fallbackTitle, sections };
+  return plan;
 }
 
 /** Range covering lines [from, to] including the newline that attaches them. */
@@ -103,8 +134,50 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
 
     const edit = new vscode.WorkspaceEdit();
     const at = (n: number) => doc.lineAt(Math.max(0, Math.min(n, doc.lineCount - 1)));
+    const plan = parsePlan(doc.getText(), "");
 
     switch (m.t) {
+      case "title": {
+        if (!m.text.trim()) {
+          return false;
+        }
+        const heading = `# ${m.text.trim()}`;
+        if (plan.titleLine < 0) {
+          edit.insert(doc.uri, new vscode.Position(0, 0), `${heading}\n\n`);
+        } else {
+          edit.replace(doc.uri, at(plan.titleLine).range, heading);
+        }
+        break;
+      }
+      case "description": {
+        const text = m.text.trim();
+        if (plan.descriptionLine >= 0) {
+          const line = at(plan.descriptionLine);
+          if (text) {
+            edit.replace(doc.uri, line.range, text);
+          } else {
+            edit.delete(doc.uri, lineSpan(doc, line.lineNumber, line.lineNumber));
+          }
+        } else if (text && plan.titleLine >= 0) {
+          edit.insert(doc.uri, at(plan.titleLine).range.end, `\n${text}`);
+        } else {
+          return false;
+        }
+        break;
+      }
+      case "addTask": {
+        // Top-level tasks live between the header and the first section.
+        const last = plan.tasks[plan.tasks.length - 1];
+        const after = last
+          ? last.line
+          : Math.max(plan.descriptionLine, plan.titleLine);
+        if (after < 0) {
+          edit.insert(doc.uri, new vscode.Position(0, 0), "- [ ]\n");
+        } else {
+          edit.insert(doc.uri, at(after).range.end, "\n- [ ]");
+        }
+        break;
+      }
       case "status": {
         const line = at(m.line);
         if (!ISSUE.test(line.text) || !(m.status in TOKEN)) {
@@ -132,7 +205,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         edit.replace(
           doc.uri,
           new vscode.Range(line.lineNumber, start, line.lineNumber, line.text.length),
-          gap + m.text + (m.addAfter ? "\n- [ ]" : "")
+          gap + m.text
         );
         break;
       }
@@ -229,6 +302,7 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
         <span id="pct">0%</span>
       </div>
     </div>
+    <p class="hero-desc" id="description"></p>
     <div class="hero-meta" id="meta"></div>
   </section>
 
@@ -239,12 +313,18 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
       <rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
       <path d="M7 9.5h10M7 13h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
-    <h2>No issues yet</h2>
-    <p>Add a section below, or type directly in the file using <code>## Section</code> and <code>- [ ] Task</code>.</p>
+    <h2>Nothing planned yet</h2>
+    <p>Add a task or a section below, or type directly in the file using <code>## Section</code> and <code>- [ ] Task</code>.</p>
   </div>
 
   <div class="footer">
-    <button type="button" class="add-section" id="add-section">
+    <button type="button" class="add-btn" id="add-task">
+      <svg viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      Add task
+    </button>
+    <button type="button" class="add-btn" id="add-section">
       <svg viewBox="0 0 12 12" aria-hidden="true">
         <path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
       </svg>
