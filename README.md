@@ -53,7 +53,7 @@ the underlying markdown at any point, use **Reopen Editor With… → Text Edito
 
 ## Early release
 
-This is version 0.1.2, an early release. It covers tasks, subtasks, statuses,
+This is version 0.1.3, an early release. It covers tasks, subtasks, statuses,
 renaming, and deletion. Anything else you put in a `.pln` file is left untouched
 but is not shown in the editor.
 
