@@ -104,11 +104,48 @@ button {
   border-radius: 4px;
 }
 
-/* ---------- Breadcrumb (always visible) ---------- */
+/* ---------- Breadcrumb ---------- */
 
 .crumb {
   padding: 10px 24px 0;
   min-height: 28px;
+}
+
+.raw {
+  box-sizing: border-box;
+  display: none;
+  width: 100%;
+  min-height: calc(100vh - 48px);
+  margin: 0;
+  padding: 16px 24px 32px;
+  border: none;
+  resize: none;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  letter-spacing: inherit;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.raw:focus,
+.raw:focus-visible {
+  outline: none;
+}
+
+body.raw-mode .editor {
+  display: none;
+}
+
+body.raw-mode .crumb {
+  display: none;
+}
+
+body.raw-mode .raw {
+  display: block;
 }
 
 .crumb-list {
@@ -205,11 +242,14 @@ button {
 .hero h1 {
   margin: 0;
   min-width: 0;
+  flex: 1;
   font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.022em;
   line-height: 1.25;
   cursor: text;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .hero h1.placeholder {
@@ -217,13 +257,17 @@ button {
 }
 
 .hero-desc {
-  margin: 0 0 16px;
-  max-width: 68ch;
+  box-sizing: border-box;
+  width: min(68ch, 100%);
   min-height: 6.2em;
+  margin: 0 0 16px;
   color: var(--text-2);
   line-height: 1.55;
   cursor: text;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .hero-desc.placeholder {
@@ -232,6 +276,8 @@ button {
 
 .hero-desc p {
   margin: 0 0 0.75em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .hero-desc p:last-child {
@@ -244,24 +290,31 @@ button {
   padding: 0.1em 0.35em;
   border-radius: 3px;
   background: var(--bg-chip);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .hero-desc a {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .inline-area {
+  box-sizing: border-box;
   display: block;
-  width: 100%;
-  max-width: 68ch;
-  height: 6.2em;
+  width: min(68ch, 100%);
   min-height: 6.2em;
-  max-height: 6.2em;
+  height: auto;
   margin: 0 0 16px;
   resize: none;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
   line-height: 1.55;
   color: var(--text-2);
 }
@@ -495,7 +548,21 @@ button {
   outline: none;
 }
 
-.hero-top .inline-input {
+.inline-title {
+  box-sizing: border-box;
+  display: block;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 1.25em;
+  height: auto;
+  margin: 0;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
   font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.022em;
@@ -505,7 +572,7 @@ button {
 /* The hero is not a flex container, so this input needs an explicit width. */
 .hero > .inline-input {
   display: block;
-  width: 100%;
+  width: min(68ch, 100%);
   max-width: 68ch;
   margin: 0 0 16px;
   color: var(--text-2);

@@ -34,11 +34,18 @@ class WorkspaceEdit {
   }
 }
 
+class TabInputCustom {
+  constructor(uri, viewType) {
+    this.uri = uri;
+    this.viewType = viewType;
+  }
+}
+
 class Doc {
   constructor(text, name = "plan") {
     this.text = text;
     this.fileName = `/tmp/${name}.pln`;
-    this.uri = {};
+    this.uri = { toString: () => `file:///tmp/${name}.pln` };
   }
   get lines() {
     return this.text.split("\n");
@@ -70,6 +77,8 @@ class Doc {
 let warning = { reply: "Delete", calls: [] };
 let provider;
 let docListener;
+let activeTab;
+const registeredCommands = {};
 /** Snapshots of document text before each applyEdit (native undo stand-in). */
 let undoStack = [];
 let redoStack = [];
@@ -78,6 +87,7 @@ const vscode = {
   Position,
   Range,
   WorkspaceEdit,
+  TabInputCustom,
   Uri: { file: (p) => ({ p }), joinPath: (u, ...s) => ({ p: [u.p, ...s].join("/") }) },
   workspace: {
     applyEdit: async (edit) => {
@@ -93,7 +103,14 @@ const vscode = {
     },
   },
   commands: {
+    registerCommand: (id, fn) => {
+      registeredCommands[id] = fn;
+      return { dispose() {} };
+    },
     executeCommand: async (cmd) => {
+      if (cmd === "setContext") {
+        return;
+      }
       if (cmd === "undo") {
         if (!undoStack.length) {
           return;
@@ -122,6 +139,11 @@ const vscode = {
       warning.calls.push(message);
       return warning.reply;
     },
+    tabGroups: {
+      get activeTabGroup() {
+        return { activeTab };
+      },
+    },
   },
 };
 
@@ -144,6 +166,7 @@ function open(text, name) {
   activeDoc = new Doc(text, name);
   const sent = [];
   const panel = {
+    active: true,
     webview: {
       cspSource: "vscode-webview:",
       asWebviewUri: (u) => u.p,
@@ -154,9 +177,11 @@ function open(text, name) {
       options: {},
       html: "",
     },
+    onDidChangeViewState: () => ({ dispose() {} }),
     onDidDispose() {},
   };
   provider.resolveCustomTextEditor(activeDoc, panel);
+  activeTab = { input: new TabInputCustom(activeDoc.uri, "pln.planEditor") };
   panel.send({ t: "ready" }); // the webview asks for data once its script loads
   return {
     panel,
@@ -196,6 +221,7 @@ test("parses the project title, description, and the three statuses", () => {
   assert.strictEqual(plan.titleLine, 0);
   assert.strictEqual(plan.description, "A short plan.");
   assert.strictEqual(plan.descriptionLine, 1);
+  assert.strictEqual(plan.descriptionEnd, 1);
   assert.deepStrictEqual(outline(plan), [
     ["Alpha", "todo", 0],
     ["one", "todo", 1],
@@ -283,7 +309,18 @@ test("leaves the description empty when there is none", () => {
     const plan = parsePlan(text, "x");
     assert.strictEqual(plan.description, "", JSON.stringify(text));
     assert.strictEqual(plan.descriptionLine, -1);
+    assert.strictEqual(plan.descriptionEnd, -1);
   }
+});
+
+test("parses a multiline plan description", () => {
+  const plan = parsePlan(
+    "# Launch\n\nGoal: ship it.\n>\n> More detail here.\n\n- [ ] First\n",
+    "x"
+  );
+  assert.strictEqual(plan.description, "Goal: ship it.\n>\n> More detail here.");
+  assert.strictEqual(plan.descriptionLine, 2);
+  assert.strictEqual(plan.descriptionEnd, 4);
 });
 
 test("handles empty and malformed content without throwing", () => {
@@ -292,6 +329,7 @@ test("handles empty and malformed content without throwing", () => {
     titleLine: -1,
     description: "",
     descriptionLine: -1,
+    descriptionEnd: -1,
     tasks: [],
   });
 
@@ -371,6 +409,33 @@ test("the webview has a persistent breadcrumb and a View details menu action", (
   assert.match(ui, /View details/);
   assert.match(ui, /renderBreadcrumb/);
   assert.match(ui, /navigateTo\(task\.line\)/);
+});
+
+test("the host sends raw source and the webview keeps an editable raw surface", () => {
+  const ed = open(SAMPLE);
+  assert.strictEqual(ed.sent[0].source, SAMPLE);
+  assert.match(ed.panel.webview.html, /<textarea[^>]*id="raw"/);
+  assert.doesNotMatch(ed.panel.webview.html, /view-switch|view-preview|view-raw/);
+});
+
+test("hero title and description edit with auto-growing textareas", () => {
+  const fs = require("node:fs");
+  const ui = fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
+  const css = fs.readFileSync(`${__dirname}/../media/planEditor.css`, "utf8");
+  assert.match(ui, /inline-title/);
+  assert.match(ui, /editArea\(el\.description/);
+  assert.match(ui, /editArea\(el\.title/);
+  assert.match(css, /\.inline-title\s*\{/);
+  assert.match(css, /\.inline-area\s*\{[^}]*min-height:\s*6\.2em/s);
+});
+
+test("raw source edits replace the whole document", () => {
+  const ed = open(SAMPLE);
+  const next = "# Renamed\n\n- [ ] Solo\n";
+  ed.send({ t: "source", text: next });
+  assert.strictEqual(ed.text, next);
+  assert.strictEqual(parsePlan(ed.text, "x").title, "Renamed");
+  assert.strictEqual(parsePlan(ed.text, "x").tasks.length, 1);
 });
 
 /* ---------- opening ---------- */
@@ -614,6 +679,15 @@ test("replaces an existing description", () => {
   assert.strictEqual(ed.text, "# Demo\nNew words, with punctuation.\n\n- [ ] a\n");
 });
 
+test("replaces a multiline plan description", () => {
+  const ed = open("# Demo\nOld line.\nSecond line.\n\n- [ ] a\n");
+  ed.send({ t: "description", text: "Goal: ship.\n>\n> Detail." });
+  assert.strictEqual(ed.text, "# Demo\nGoal: ship.\n>\n> Detail.\n\n- [ ] a\n");
+  const plan = parsePlan(ed.text, "x");
+  assert.strictEqual(plan.description, "Goal: ship.\n>\n> Detail.");
+  assert.strictEqual(plan.descriptionEnd, 3);
+});
+
 test("clearing the description removes its line", () => {
   const ed = open("# Demo\nOld words.\n\n- [ ] a\n");
   ed.send({ t: "description", text: "" });
@@ -793,4 +867,15 @@ test("status and rename leave the description intact", () => {
 test("pushed plan includes task descriptions", () => {
   const ed = open("- [ ] Auth\n  Details.\n");
   assert.strictEqual(ed.sent[0].tasks[0].description, "Details.");
+});
+
+test("title-bar Enter/Exit Raw reaches a deactivated plan panel", () => {
+  const ed = open(SAMPLE, "raw-title");
+  ed.panel.active = false; // title-bar click clears active before the command runs
+  ed.sent.length = 0;
+  registeredCommands["pln.view.enterRaw"]();
+  assert.deepStrictEqual(ed.sent, [{ t: "setView", mode: "raw" }]);
+  ed.sent.length = 0;
+  registeredCommands["pln.view.exitRaw"]();
+  assert.deepStrictEqual(ed.sent, [{ t: "setView", mode: "preview" }]);
 });

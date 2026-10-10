@@ -7,6 +7,8 @@
   const $ = (id) => document.getElementById(id);
   const el = {
     crumb: $("crumb"),
+    raw: $("raw"),
+    editor: $("editor"),
     title: $("title"),
     description: $("description"),
     meta: $("meta"),
@@ -27,10 +29,13 @@
   const collapsed = new Set(saved.collapsed || []);
   /** Focused task line for the detail view, or `null` at the plan root. */
   let focusLine = typeof saved.focusLine === "number" ? saved.focusLine : null;
+  let rawMode = !!saved.rawMode;
   const post = (m) => vscode.postMessage(m);
-  const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine });
+  const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine, rawMode });
 
   let plan = { title: "Plan", description: "", tasks: [] };
+  /** Full `.pln` source text for the Raw view. */
+  let source = "";
   let menu = null;
   /**
    * After the next document push, start editing this task.
@@ -277,10 +282,67 @@
     return view;
   }
 
+  /** Apply host payload: plan fields + optional `source` for Raw view. */
+  function applyPayload(data) {
+    source = typeof data.source === "string" ? data.source : source;
+    const next = { ...data };
+    delete next.source;
+    plan = next;
+  }
+
+  /** Debounced write-back while editing Raw Markdown. */
+  let rawTimer = 0;
+  let rawDirty = false;
+
+  function flushRaw() {
+    if (rawTimer) {
+      clearTimeout(rawTimer);
+      rawTimer = 0;
+    }
+    if (!rawDirty) {
+      return;
+    }
+    const text = el.raw.value;
+    rawDirty = false;
+    source = text;
+    post({ t: "source", text });
+  }
+
+  function setRawMode(on) {
+    const next = !!on;
+    if (rawMode && !next) {
+      flushRaw();
+    }
+    const changed = rawMode !== next;
+    rawMode = next;
+    document.body.classList.toggle("raw-mode", rawMode);
+    el.raw.classList.toggle("hidden", !rawMode);
+    persist();
+    if (changed) {
+      post({ t: "viewMode", mode: rawMode ? "raw" : "preview" });
+    }
+    if (rawMode) {
+      closeMenu();
+      if (!rawDirty && el.raw.value !== source) {
+        el.raw.value = source;
+      }
+    }
+  }
+
   /** Paint the current `plan` into the DOM. */
   function render() {
     closeMenu();
     reconcileNav();
+    setRawMode(rawMode);
+
+    if (rawMode) {
+      // Don't clobber in-progress typing when the host echoes our own edit.
+      if (!rawDirty && el.raw.value !== source) {
+        el.raw.value = source;
+      }
+      shown = JSON.stringify({ plan, focusLine, source, rawMode });
+      return;
+    }
 
     const focused = focusedTask();
     const inDetail = !!focused;
@@ -324,8 +386,13 @@
     } else {
       el.title.textContent = plan.title || "Untitled";
       el.title.classList.toggle("placeholder", !plan.title);
-      el.description.textContent = plan.description || "Add a description…";
-      el.description.classList.toggle("placeholder", !plan.description);
+      if (plan.description) {
+        el.description.classList.remove("placeholder");
+        el.description.innerHTML = renderMarkdown(plan.description);
+      } else {
+        el.description.classList.add("placeholder");
+        el.description.textContent = "Add a description…";
+      }
     }
 
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
@@ -392,7 +459,7 @@
       textNodes[textNodes.length - 1].textContent = addText;
     }
 
-    shown = JSON.stringify({ plan, focusLine });
+    shown = JSON.stringify({ plan, focusLine, source, rawMode });
   }
 
   /**
@@ -516,24 +583,26 @@
   function editTitle() {
     const focused = focusedTask();
     if (focused) {
-      edit(el.title, focused.title, (value) => {
-        if (value === focused.title) {
+      editArea(el.title, focused.title, (value) => {
+        const text = value.replace(/\s+/g, " ").trim();
+        if (text === focused.title) {
           return false;
         }
-        focused.title = value;
-        post({ t: "text", line: focused.line, text: value });
+        focused.title = text;
+        post({ t: "text", line: focused.line, text: text });
         return true;
-      });
+      }, { className: "inline-input inline-title", singleLine: true });
       return;
     }
-    edit(el.title, plan.title, (value) => {
-      if (value === plan.title) {
+    editArea(el.title, plan.title, (value) => {
+      const text = value.replace(/\s+/g, " ").trim();
+      if (text === plan.title) {
         return false;
       }
-      plan.title = value;
-      post({ t: "title", text: value });
+      plan.title = text;
+      post({ t: "title", text: text });
       return true;
-    });
+    }, { className: "inline-input inline-title", singleLine: true });
   }
 
   /** Begin editing the plan description (root) or task description (detail). */
@@ -550,7 +619,7 @@
       });
       return;
     }
-    edit(el.description, plan.description, (value) => {
+    editArea(el.description, plan.description || "", (value) => {
       if (value === plan.description) {
         return false;
       }
@@ -561,26 +630,40 @@
   }
 
   /**
-   * Multiline editor for task descriptions.
+   * Auto-growing textarea editor for titles and descriptions.
    * @param {HTMLElement|null} label
    * @param {string} initial
    * @param {(value: string) => boolean} commit
+   * @param {{ className?: string, singleLine?: boolean }=} opts
    */
-  function editArea(label, initial, commit) {
+  function editArea(label, initial, commit, opts) {
     if (!label || activeInput) {
       return;
     }
     closeMenu();
 
+    const options = opts || {};
+    const singleLine = !!options.singleLine;
     const input = document.createElement("textarea");
-    input.className = "inline-input inline-area";
+    input.className = options.className || "inline-input inline-area";
     input.value = initial;
     input.spellcheck = false;
-    input.rows = 4;
+    input.rows = singleLine ? 1 : 4;
     label.replaceWith(input);
     input.scrollIntoView({ block: "nearest" });
     input.focus();
+    if (singleLine) {
+      input.select();
+    }
     activeInput = input;
+
+    const fitHeight = () => {
+      input.style.height = "0px";
+      input.style.height = `${input.scrollHeight}px`;
+    };
+    fitHeight();
+    requestAnimationFrame(fitHeight);
+    input.addEventListener("input", fitHeight);
 
     let settled = false;
     const finish = (save) => {
@@ -591,10 +674,13 @@
       activeInput = null;
       input.replaceWith(label);
 
-      if (save && commit(input.value.replace(/\s+$/g, "").replace(/^\n+/g, ""))) {
+      const raw = singleLine
+        ? input.value
+        : input.value.replace(/\s+$/g, "").replace(/^\n+/g, "");
+      if (save && commit(raw)) {
         queuedPlan = null;
       } else if (queuedPlan) {
-        plan = queuedPlan;
+        applyPayload(queuedPlan);
         queuedPlan = null;
       }
       render();
@@ -606,7 +692,7 @@
       if (e.key === "Escape") {
         e.preventDefault();
         finish(false);
-      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      } else if (e.key === "Enter" && (singleLine || e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         finish(true);
       }
@@ -664,7 +750,7 @@
       if (save && commit(input.value.trim())) {
         queuedPlan = null;
       } else if (queuedPlan) {
-        plan = queuedPlan;
+        applyPayload(queuedPlan);
         queuedPlan = null;
       }
       render();
@@ -754,6 +840,16 @@
 
   /* ---------- wiring ---------- */
 
+  el.raw.addEventListener("input", () => {
+    rawDirty = true;
+    source = el.raw.value;
+    if (rawTimer) {
+      clearTimeout(rawTimer);
+    }
+    rawTimer = setTimeout(flushRaw, 200);
+  });
+  el.raw.addEventListener("blur", flushRaw);
+
   el.title.addEventListener("click", editTitle);
   el.description.addEventListener("click", (e) => {
     if (e.target && e.target.closest && e.target.closest("a")) {
@@ -771,6 +867,11 @@
     if (e.key === "Escape") {
       if (menu) {
         closeMenu();
+        return;
+      }
+      if (rawMode) {
+        setRawMode(false);
+        render();
         return;
       }
       if (!activeInput && focusLine !== null) {
@@ -795,20 +896,40 @@
   });
 
   window.addEventListener("message", (e) => {
-    if (activeInput) {
-      queuedPlan = e.data;
+    const data = e.data;
+    if (data && data.t === "setView") {
+      setRawMode(data.mode === "raw");
+      render();
+      if (rawMode) {
+        el.raw.focus();
+      }
       return;
     }
-    const fingerprint = JSON.stringify({ plan: e.data, focusLine });
+    if (activeInput) {
+      queuedPlan = data;
+      return;
+    }
+    const fingerprint = JSON.stringify({
+      plan: (() => {
+        const p = { ...data };
+        delete p.source;
+        return p;
+      })(),
+      focusLine,
+      source: data.source,
+      rawMode,
+    });
     if (fingerprint === shown) {
       return;
     }
-    plan = e.data;
+    applyPayload(data);
     reconcileNav();
     render();
     applyFocus();
     focusAfterRender = null;
   });
 
+  setRawMode(rawMode);
+  post({ t: "viewMode", mode: rawMode ? "raw" : "preview" });
   post({ t: "ready" });
 })();

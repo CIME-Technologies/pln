@@ -45,7 +45,33 @@
         ],
         "priority": "default"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "pln.view.enterRaw",
+        "title": "Raw View",
+        "icon": "$(code)"
+      },
+      {
+        "command": "pln.view.exitRaw",
+        "title": "Exit Raw View",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "pln.view.enterRaw",
+          "when": "activeCustomEditorId == 'pln.planEditor' && !pln.rawMode",
+          "group": "navigation"
+        },
+        {
+          "command": "pln.view.exitRaw",
+          "when": "activeCustomEditorId == 'pln.planEditor' && pln.rawMode",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",

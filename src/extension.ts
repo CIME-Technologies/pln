@@ -27,8 +27,10 @@ export interface Plan {
   /** Line of the `#` heading, or `-1` if absent. */
   titleLine: number;
   description: string;
-  /** Line of the description prose, or `-1` if absent. */
+  /** First description line, or `-1` if absent. */
   descriptionLine: number;
+  /** Last description line (inclusive), or `-1` if none. */
+  descriptionEnd: number;
   /** Document order; each subtask follows its parent. */
   tasks: Task[];
 }
@@ -89,19 +91,17 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
     titleLine: -1,
     description: "",
     descriptionLine: -1,
+    descriptionEnd: -1,
     tasks: [],
   };
   /** Open ancestors, shallowest first — parent is the nearest less-indented task. */
   const open: { indent: number; line: number }[] = [];
   /** Raw description lines for the most recent task (document order). */
   let pending: { taskIndex: number; lines: { line: number; raw: string }[] } | null = null;
+  /** Prose lines before the first task (plan description). */
+  const planDesc: { line: number; raw: string }[] = [];
 
-  const flushDescription = () => {
-    if (!pending) {
-      return;
-    }
-    const task = plan.tasks[pending.taskIndex];
-    const rows = pending.lines;
+  const trimSlice = (rows: { line: number; raw: string }[]) => {
     let start = 0;
     let end = rows.length;
     while (start < end && !rows[start].raw.trim()) {
@@ -110,7 +110,15 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
     while (end > start && !rows[end - 1].raw.trim()) {
       end -= 1;
     }
-    const slice = rows.slice(start, end);
+    return rows.slice(start, end);
+  };
+
+  const flushDescription = () => {
+    if (!pending) {
+      return;
+    }
+    const task = plan.tasks[pending.taskIndex];
+    const slice = trimSlice(pending.lines);
     if (slice.length) {
       const widths = slice.filter((r) => r.raw.trim()).map((r) => indentOf(r.raw));
       const base = widths.length ? Math.min(...widths) : 0;
@@ -121,9 +129,28 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
     pending = null;
   };
 
+  const flushPlanDescription = () => {
+    if (plan.descriptionLine >= 0) {
+      return;
+    }
+    const slice = trimSlice(
+      planDesc.filter((row) => {
+        const t = row.raw.trim();
+        return !t.startsWith("#");
+      })
+    );
+    if (!slice.length) {
+      return;
+    }
+    plan.description = slice.map((r) => r.raw.replace(/\s+$/g, "")).join("\n");
+    plan.descriptionLine = slice[0].line;
+    plan.descriptionEnd = slice[slice.length - 1].line;
+  };
+
   text.split(/\r?\n/).forEach((raw, i) => {
     const task = TASK.exec(raw);
     if (task) {
+      flushPlanDescription();
       flushDescription();
       const indent = indentOf(raw);
       while (open.length && open[open.length - 1].indent >= indent) {
@@ -152,18 +179,12 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
       plan.titleLine = i;
       return;
     }
-    const prose = raw.trim();
-    if (
-      prose &&
-      !prose.startsWith("#") &&
-      plan.descriptionLine < 0 &&
-      !plan.tasks.length
-    ) {
-      plan.description = prose;
-      plan.descriptionLine = i;
+    if (!plan.tasks.length) {
+      planDesc.push({ line: i, raw });
     }
   });
 
+  flushPlanDescription();
   flushDescription();
   return plan;
 }
@@ -232,19 +253,99 @@ function lineSpan(doc: vscode.TextDocument, from: number, to: number): vscode.Ra
   return new vscode.Range(start, doc.lineAt(to).range.end);
 }
 
+/** Active plan editor panels, keyed by document URI. */
+const panels = new Map<string, vscode.WebviewPanel>();
+
+/** Last known raw-mode flag per document (for title-bar toggled state). */
+const rawModeByDoc = new Map<string, boolean>();
+
+/** Last plan panel that reported active (title-bar clicks clear `panel.active`). */
+let lastActivePanel: vscode.WebviewPanel | undefined;
+
+function setRawContext(docKey: string, raw: boolean): void {
+  rawModeByDoc.set(docKey, raw);
+  void vscode.commands.executeCommand("setContext", "pln.rawMode", raw);
+}
+
+function panelDocKey(panel: vscode.WebviewPanel): string | undefined {
+  for (const [key, p] of panels) {
+    if (p === panel) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the plan webview to target for title-bar Enter/Exit Raw.
+ * Title-bar clicks often clear `panel.active` before the command runs, so
+ * prefer the active custom editor tab, then an active panel, then the
+ * last-active / sole open panel.
+ */
+function activePlanPanel(): vscode.WebviewPanel | undefined {
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  const input = tab?.input;
+  if (input instanceof vscode.TabInputCustom && input.viewType === "pln.planEditor") {
+    const panel = panels.get(input.uri.toString());
+    if (panel) {
+      lastActivePanel = panel;
+      return panel;
+    }
+  }
+
+  for (const panel of panels.values()) {
+    if (panel.active) {
+      lastActivePanel = panel;
+      return panel;
+    }
+  }
+
+  if (lastActivePanel) {
+    for (const panel of panels.values()) {
+      if (panel === lastActivePanel) {
+        return panel;
+      }
+    }
+  }
+
+  if (panels.size === 1) {
+    return panels.values().next().value;
+  }
+  return undefined;
+}
+
+function setPlanView(mode: "preview" | "raw"): void {
+  const panel = activePlanPanel();
+  if (!panel) {
+    return;
+  }
+  const key = panelDocKey(panel);
+  if (key) {
+    setRawContext(key, mode === "raw");
+  }
+  void panel.webview.postMessage({ t: "setView", mode });
+}
+
 /** Custom text editor that syncs a `.pln` {@link Plan} with the webview UI. */
 class PlanEditor implements vscode.CustomTextEditorProvider {
   constructor(private readonly root: vscode.Uri) {}
 
   resolveCustomTextEditor(doc: vscode.TextDocument, panel: vscode.WebviewPanel): void {
     const media = vscode.Uri.joinPath(this.root, "media");
+    const docKey = doc.uri.toString();
     panel.webview.options = { enableScripts: true, localResourceRoots: [media] };
     panel.webview.html = page(panel.webview, media);
+    panels.set(docKey, panel);
+    lastActivePanel = panel;
+    setRawContext(docKey, rawModeByDoc.get(docKey) ?? false);
 
-    const send = () =>
-      panel.webview.postMessage(
-        parsePlan(doc.getText(), path.basename(doc.fileName, ".pln"))
-      );
+    const send = () => {
+      const text = doc.getText();
+      panel.webview.postMessage({
+        ...parsePlan(text, path.basename(doc.fileName, ".pln")),
+        source: text,
+      });
+    };
 
     let timer: ReturnType<typeof setTimeout>;
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -254,12 +355,31 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
       }
     });
 
+    const viewSub = panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        lastActivePanel = e.webviewPanel;
+        setRawContext(docKey, rawModeByDoc.get(docKey) ?? false);
+      }
+    });
+
     panel.onDidDispose(() => {
       clearTimeout(timer);
       sub.dispose();
+      viewSub.dispose();
+      panels.delete(docKey);
+      if (lastActivePanel === panel) {
+        lastActivePanel = undefined;
+      }
+      if (![...panels.keys()].some((key) => rawModeByDoc.get(key))) {
+        void vscode.commands.executeCommand("setContext", "pln.rawMode", false);
+      }
     });
     // Rejected edits produce no change event — push the current plan anyway.
     panel.webview.onDidReceiveMessage(async (m) => {
+      if (m.t === "viewMode") {
+        setRawContext(docKey, m.mode === "raw");
+        return;
+      }
       if (m.t === "ready" || !(await this.edit(doc, m))) {
         send();
       }
@@ -307,13 +427,22 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         break;
       }
       case "description": {
-        const text = m.text.trim();
-        if (plan.descriptionLine >= 0) {
-          const line = at(plan.descriptionLine);
+        if (typeof m.text !== "string") {
+          return false;
+        }
+        const text = m.text.replace(/\r\n/g, "\n").replace(/\n+$/g, "").replace(/^\n+/g, "");
+        const end =
+          plan.descriptionEnd >= 0 ? plan.descriptionEnd : plan.descriptionLine;
+        if (plan.descriptionLine >= 0 && end >= 0) {
           if (text) {
-            edit.replace(doc.uri, line.range, text);
+            const last = at(end);
+            edit.replace(
+              doc.uri,
+              new vscode.Range(plan.descriptionLine, 0, end, last.text.length),
+              text
+            );
           } else {
-            edit.delete(doc.uri, lineSpan(doc, line.lineNumber, line.lineNumber));
+            edit.delete(doc.uri, lineSpan(doc, plan.descriptionLine, end));
           }
         } else if (text && plan.titleLine >= 0) {
           edit.insert(doc.uri, at(plan.titleLine).range.end, `\n${text}`);
@@ -395,6 +524,20 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         }
         break;
       }
+      case "source": {
+        if (typeof m.text !== "string") {
+          return false;
+        }
+        const end = doc.lineCount > 0 ? at(doc.lineCount - 1) : null;
+        const range = end
+          ? new vscode.Range(0, 0, end.lineNumber, end.text.length)
+          : new vscode.Range(0, 0, 0, 0);
+        if (doc.getText() === m.text) {
+          return false;
+        }
+        edit.replace(doc.uri, range, m.text);
+        break;
+      }
       default:
         return false;
     }
@@ -448,52 +591,59 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
 </head>
 <body>
   <nav id="crumb" class="crumb" aria-label="Breadcrumb"></nav>
-  <section class="hero">
-    <div class="hero-top">
-      <h1 id="title">Plan</h1>
-      <div class="progress">
-        <svg class="donut" viewBox="0 0 18 18" aria-hidden="true">
-          <circle class="donut-track" cx="9" cy="9" r="7"/>
-          <circle class="donut-fill" id="donut" cx="9" cy="9" r="7"/>
-        </svg>
-        <span id="pct">0%</span>
+
+  <div id="editor" class="editor">
+    <section class="hero">
+      <div class="hero-top">
+        <h1 id="title">Plan</h1>
+        <div class="progress">
+          <svg class="donut" viewBox="0 0 18 18" aria-hidden="true">
+            <circle class="donut-track" cx="9" cy="9" r="7"/>
+            <circle class="donut-fill" id="donut" cx="9" cy="9" r="7"/>
+          </svg>
+          <span id="pct">0%</span>
+        </div>
       </div>
-    </div>
-    <div class="hero-desc" id="description"></div>
-    <div class="hero-meta" id="meta"></div>
-  </section>
+      <div class="hero-desc" id="description"></div>
+      <div class="hero-meta" id="meta"></div>
+    </section>
 
-  <ul class="rows" id="tasks"></ul>
+    <ul class="rows" id="tasks"></ul>
 
-  <div id="empty" class="empty hidden">
-    <svg class="empty-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
-      <path d="M7 9.5h10M7 13h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>
-    <h2>Nothing planned yet</h2>
-    <p>Add a task below.</p>
-  </div>
-
-  <div class="footer">
-    <button type="button" class="add-btn" id="add-task">
-      <svg viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    <div id="empty" class="empty hidden">
+      <svg class="empty-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M7 9.5h10M7 13h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
       </svg>
-      Add task
-    </button>
+      <h2>Nothing planned yet</h2>
+      <p>Add a task below.</p>
+    </div>
+
+    <div class="footer">
+      <button type="button" class="add-btn" id="add-task">
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M6 2.5v7M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        Add task
+      </button>
+    </div>
   </div>
+
+  <textarea id="raw" class="raw hidden" aria-label="Raw Markdown" spellcheck="false"></textarea>
 
   <script nonce="${nonce}" src="${uri("planEditor.js")}"></script>
 </body>
 </html>`;
 }
 
-/** Register the Plan custom editor. */
+/** Register the Plan custom editor and title-bar Enter/Exit Raw actions. */
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       "pln.planEditor",
       new PlanEditor(context.extensionUri)
-    )
+    ),
+    vscode.commands.registerCommand("pln.view.enterRaw", () => setPlanView("raw")),
+    vscode.commands.registerCommand("pln.view.exitRaw", () => setPlanView("preview"))
   );
 }
