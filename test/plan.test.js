@@ -129,7 +129,7 @@ const load = Module._load;
 Module._load = (request, ...rest) =>
   request === "vscode" ? vscode : load.call(Module, request, ...rest);
 
-const { activate, parsePlan } = require("../out/extension.js");
+const { activate, parsePlan, blockEnd } = require("../out/extension.js");
 
 /* ---------- harness ---------- */
 
@@ -205,10 +205,26 @@ test("parses the project title, description, and the three statuses", () => {
   ]);
 });
 
-test("a task carries only a title, a status, and a parent", () => {
+test("a task carries a title, status, parent, and description fields", () => {
   assert.deepStrictEqual(parsePlan("- [ ] A\n  - [x] B\n", "x").tasks, [
-    { line: 0, title: "A", status: "todo", parent: null },
-    { line: 1, title: "B", status: "done", parent: 0 },
+    {
+      line: 0,
+      title: "A",
+      status: "todo",
+      parent: null,
+      description: "",
+      descriptionLine: -1,
+      descriptionEnd: -1,
+    },
+    {
+      line: 1,
+      title: "B",
+      status: "done",
+      parent: 0,
+      description: "",
+      descriptionLine: -1,
+      descriptionEnd: -1,
+    },
   ]);
 });
 
@@ -290,6 +306,9 @@ test("handles empty and malformed content without throwing", () => {
     title: "",
     status: "todo",
     parent: null,
+    description: "",
+    descriptionLine: -1,
+    descriptionEnd: -1,
   });
 
   assert.strictEqual(
@@ -329,11 +348,29 @@ test("section messages are rejected and leave the file alone", async () => {
 test("the webview shows no generated task identifiers", () => {
   const ed = open(SAMPLE);
   for (const task of ed.sent[0].tasks) {
-    assert.deepStrictEqual(Object.keys(task).sort(), ["line", "parent", "status", "title"]);
+    assert.deepStrictEqual(Object.keys(task).sort(), [
+      "description",
+      "descriptionEnd",
+      "descriptionLine",
+      "line",
+      "parent",
+      "status",
+      "title",
+    ]);
   }
   const fs = require("node:fs");
   const ui = ed.panel.webview.html + fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
   assert.doesNotMatch(ui, /row-id|taskPrefix|nextId/);
+});
+
+test("the webview has a persistent breadcrumb and a View details menu action", () => {
+  const ed = open(SAMPLE);
+  assert.match(ed.panel.webview.html, /id="crumb"[^>]*aria-label="Breadcrumb"/);
+  const fs = require("node:fs");
+  const ui = fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
+  assert.match(ui, /View details/);
+  assert.match(ui, /renderBreadcrumb/);
+  assert.match(ui, /navigateTo\(task\.line\)/);
 });
 
 /* ---------- opening ---------- */
@@ -420,6 +457,9 @@ test("clearing a task title keeps the task as untitled", () => {
     title: "",
     status: "todo",
     parent: null,
+    description: "",
+    descriptionLine: -1,
+    descriptionEnd: -1,
   });
   assert.strictEqual(parsePlan(ed.text, "x").tasks.length, 5);
 });
@@ -678,4 +718,79 @@ test("pushes a fresh plan to the webview after the document changes", async () =
   const latest = ed.sent[ed.sent.length - 1];
   assert.strictEqual(latest.tasks[1].status, "done");
   assert.ok(ed.sent.length > 1, "webview should receive an update after an edit");
+});
+
+/* ---------- task descriptions ---------- */
+
+test("parses multiline task descriptions and nested tasks", () => {
+  const plan = parsePlan(
+    `- [-] Implement authentication
+  First paragraph.
+
+  Second paragraph.
+  - [ ] Add login
+    Create the login form.
+`,
+    "x"
+  );
+  assert.strictEqual(
+    plan.tasks[0].description,
+    "First paragraph.\n\nSecond paragraph."
+  );
+  assert.strictEqual(plan.tasks[1].title, "Add login");
+  assert.strictEqual(plan.tasks[1].parent, 0);
+  assert.strictEqual(plan.tasks[1].description, "Create the login form.");
+});
+
+test("ordinary Markdown bullets are description text, not tasks", () => {
+  const plan = parsePlan(
+    "- [ ] Parent\n  - plain bullet\n  - [ ] Real child\n",
+    "x"
+  );
+  assert.strictEqual(plan.tasks.length, 2);
+  assert.strictEqual(plan.tasks[0].description, "- plain bullet");
+});
+
+test("blockEnd covers descriptions and descendants", () => {
+  const plan = parsePlan("- [ ] A\n  desc A\n  - [ ] B\n    desc B\n- [ ] C\n", "x");
+  assert.strictEqual(blockEnd(plan, 0), 3);
+  assert.strictEqual(blockEnd(plan, 2), 3);
+});
+
+test("writes and clears a task description", () => {
+  const ed = open("# T\n\n- [ ] Auth\n  - [ ] Child\n");
+  ed.send({ t: "taskDescription", line: 2, text: "Secure the app." });
+  assert.strictEqual(ed.text, "# T\n\n- [ ] Auth\n  Secure the app.\n  - [ ] Child\n");
+  ed.send({ t: "taskDescription", line: 2, text: "" });
+  assert.strictEqual(ed.text, "# T\n\n- [ ] Auth\n  - [ ] Child\n");
+});
+
+test("adding a child inserts after descriptions and descendants", () => {
+  const ed = open("- [ ] Parent\n  Parent blurb.\n  - [ ] Existing\n    Child blurb.\n");
+  ed.send({ t: "addTask", parent: 0 });
+  assert.strictEqual(
+    ed.text,
+    "- [ ] Parent\n  Parent blurb.\n  - [ ] Existing\n    Child blurb.\n  - [ ]\n"
+  );
+});
+
+test("deleting a task removes its description and descendants", async () => {
+  warning = { reply: "Delete", calls: [] };
+  const ed = open(
+    "- [ ] Keep\n- [ ] Remove\n  Gone.\n  - [ ] Nested\n    Notes.\n- [ ] After\n"
+  );
+  await ed.send({ t: "deleteTask", line: 1 });
+  assert.strictEqual(ed.text, "- [ ] Keep\n- [ ] After\n");
+});
+
+test("status and rename leave the description intact", () => {
+  const ed = open("- [ ] Auth\n  Keep me.\n");
+  ed.send({ t: "status", line: 0, status: "done" });
+  ed.send({ t: "text", line: 0, text: "Authentication" });
+  assert.strictEqual(ed.text, "- [x] Authentication\n  Keep me.\n");
+});
+
+test("pushed plan includes task descriptions", () => {
+  const ed = open("- [ ] Auth\n  Details.\n");
+  assert.strictEqual(ed.sent[0].tasks[0].description, "Details.");
 });

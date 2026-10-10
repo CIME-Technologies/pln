@@ -52,6 +52,7 @@
     "watch": "npm run compile -- --watch",
     "check": "tsc --noEmit",
     "git": "git add . && printf 'Commit message [update]: ' && read msg && git commit -m \"${msg:-update}\" && git push",
+    "package": "npx @vscode/vsce package",
     "test": "npm run compile && node --test test/plan.test.js"
   },
   "devDependencies": {

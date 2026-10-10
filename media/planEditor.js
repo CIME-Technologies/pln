@@ -6,6 +6,7 @@
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const el = {
+    crumb: $("crumb"),
     title: $("title"),
     description: $("description"),
     meta: $("meta"),
@@ -20,10 +21,14 @@
   const ORDER = ["todo", "in_progress", "done"];
   /** Circumference of the hero progress ring (r = 7). */
   const DONUT = 2 * Math.PI * 7;
+  const HOME = `<svg class="crumb-home" viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 6.2L7 2.4l4.5 3.8V12H9.2V8.4H4.8V12H2.5V6.2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`;
 
-  const collapsed = new Set((vscode.getState() || {}).collapsed || []);
+  const saved = vscode.getState() || {};
+  const collapsed = new Set(saved.collapsed || []);
+  /** Focused task line for the detail view, or `null` at the plan root. */
+  let focusLine = typeof saved.focusLine === "number" ? saved.focusLine : null;
   const post = (m) => vscode.postMessage(m);
-  const persist = () => vscode.setState({ collapsed: [...collapsed] });
+  const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine });
 
   let plan = { title: "Plan", description: "", tasks: [] };
   let menu = null;
@@ -92,6 +97,153 @@
     `<path d="M2.8 3.6h6.4M4.8 3.6V2.8h2.4v.8M3.6 3.6l.4 5.2h4l.4-5.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`,
     "0 0 12 12"
   );
+  const DETAIL = svg(
+    `<path d="M2.5 3.5h9v7h-9z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4.5 6h5M4.5 8h3.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>`,
+    "0 0 12 12"
+  );
+
+  /* ---------- markdown (escape-first, minimal) ---------- */
+
+  /** @param {string} s */
+  const escapeHtml = (s) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  /**
+   * Safe, minimal Markdown: paragraphs, breaks, `code`, **bold**, *italic*, http(s) links.
+   * @param {string} src
+   * @returns {string}
+   */
+  function renderMarkdown(src) {
+    if (!src) {
+      return "";
+    }
+    const escaped = escapeHtml(src);
+    const withCode = escaped.replace(/`([^`]+)`/g, "<code>$1</code>");
+    const withBold = withCode.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    const withItalic = withBold.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    const withLinks = withItalic.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" rel="noreferrer">$1</a>'
+    );
+    return withLinks
+      .split(/\n{2,}/)
+      .map((block) => `<p>${block.replace(/\n/g, "<br />")}</p>`)
+      .join("");
+  }
+
+  /* ---------- navigation ---------- */
+
+  /** @returns {{line: number, title: string, status: string, parent: number|null}|null} */
+  function focusedTask() {
+    return focusLine === null ? null : plan.tasks.find((t) => t.line === focusLine) || null;
+  }
+
+  /** @param {number|null} line */
+  function navigateTo(line) {
+    if (line !== null && !plan.tasks.some((t) => t.line === line)) {
+      return;
+    }
+    focusLine = line;
+    persist();
+    render();
+  }
+
+  /** Drop focus to the nearest surviving ancestor (or root) if the line is gone. */
+  function reconcileNav() {
+    if (focusLine === null) {
+      return;
+    }
+    if (plan.tasks.some((t) => t.line === focusLine)) {
+      return;
+    }
+    focusLine = null;
+    persist();
+  }
+
+  /** Ancestor tasks from the root parent down to `task` (exclusive). */
+  function ancestorChain(task) {
+    const chain = [];
+    let p = task.parent;
+    while (p !== null) {
+      const parent = plan.tasks.find((t) => t.line === p);
+      if (!parent) {
+        break;
+      }
+      chain.push(parent);
+      p = parent.parent;
+    }
+    return chain.reverse();
+  }
+
+  function renderBreadcrumb() {
+    const focused = focusedTask();
+    const rootLabel = plan.title || "Untitled";
+    const list = document.createElement("ol");
+    list.className = "crumb-list";
+
+    const rootLi = document.createElement("li");
+    rootLi.className = "crumb-item";
+    if (!focused) {
+      const current = document.createElement("span");
+      current.className = "crumb-current";
+      current.setAttribute("aria-current", "page");
+      current.innerHTML = `${HOME}<span class="crumb-label"></span>`;
+      current.querySelector(".crumb-label").textContent = rootLabel;
+      rootLi.appendChild(current);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "crumb-link";
+      btn.innerHTML = `${HOME}<span class="crumb-label"></span>`;
+      btn.querySelector(".crumb-label").textContent = rootLabel;
+      btn.title = rootLabel;
+      btn.setAttribute("aria-label", `Go to plan: ${rootLabel}`);
+      btn.addEventListener("click", () => navigateTo(null));
+      rootLi.appendChild(btn);
+    }
+    list.appendChild(rootLi);
+
+    if (focused) {
+      const chain = [...ancestorChain(focused), focused];
+      for (let i = 0; i < chain.length; i++) {
+        const task = chain[i];
+        const isLast = i === chain.length - 1;
+        const sep = document.createElement("li");
+        sep.className = "crumb-sep";
+        sep.setAttribute("aria-hidden", "true");
+        sep.textContent = "/";
+        list.appendChild(sep);
+
+        const li = document.createElement("li");
+        li.className = "crumb-item";
+        const label = task.title || "Untitled";
+        if (isLast) {
+          const current = document.createElement("span");
+          current.className = "crumb-current";
+          current.setAttribute("aria-current", "page");
+          current.textContent = label;
+          current.title = label;
+          li.appendChild(current);
+        } else {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "crumb-link";
+          btn.textContent = label;
+          btn.title = label;
+          btn.setAttribute("aria-label", `Go to task: ${label}`);
+          btn.addEventListener("click", () => navigateTo(task.line));
+          li.appendChild(btn);
+        }
+        list.appendChild(li);
+      }
+    }
+
+    el.crumb.replaceChildren(list);
+  }
 
   /* ---------- render ---------- */
 
@@ -128,26 +280,70 @@
   /** Paint the current `plan` into the DOM. */
   function render() {
     closeMenu();
+    reconcileNav();
 
-    const tasks = plan.tasks;
-    const done = tasks.filter((i) => i.status === "done").length;
-    const active = tasks.filter((i) => i.status === "in_progress").length;
-    const ratio = tasks.length ? done / tasks.length : 0;
+    const focused = focusedTask();
+    const inDetail = !!focused;
+    const view = layout(plan.tasks);
+    const listed = inDetail
+      ? plan.tasks.filter((t) => t.parent === focusLine)
+      : plan.tasks;
+    const scope = inDetail
+      ? plan.tasks.filter((t) => {
+          if (t.line === focused.line) {
+            return true;
+          }
+          let p = t.parent;
+          while (p !== null) {
+            if (p === focused.line) {
+              return true;
+            }
+            const parent = plan.tasks.find((x) => x.line === p);
+            p = parent ? parent.parent : null;
+          }
+          return false;
+        })
+      : plan.tasks;
+    const done = scope.filter((i) => i.status === "done").length;
+    const active = scope.filter((i) => i.status === "in_progress").length;
+    const ratio = scope.length ? done / scope.length : 0;
 
-    el.title.textContent = plan.title || "Untitled";
-    el.title.classList.toggle("placeholder", !plan.title);
-    el.description.textContent = plan.description || "Add a description…";
-    el.description.classList.toggle("placeholder", !plan.description);
+    renderBreadcrumb();
+
+    el.description.classList.remove("hidden");
+    if (inDetail) {
+      el.title.textContent = focused.title || "Untitled";
+      el.title.classList.toggle("placeholder", !focused.title);
+      if (focused.description) {
+        el.description.classList.remove("placeholder");
+        el.description.innerHTML = renderMarkdown(focused.description);
+      } else {
+        el.description.classList.add("placeholder");
+        el.description.textContent = "Add a description…";
+      }
+    } else {
+      el.title.textContent = plan.title || "Untitled";
+      el.title.classList.toggle("placeholder", !plan.title);
+      el.description.textContent = plan.description || "Add a description…";
+      el.description.classList.toggle("placeholder", !plan.description);
+    }
+
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
     el.donut.setAttribute("stroke-dasharray", DONUT);
     el.donut.setAttribute("stroke-dashoffset", DONUT * (1 - ratio));
+    const countLabel =
+      listed.length === 1
+        ? inDetail
+          ? "subtask"
+          : "task"
+        : inDetail
+          ? "subtasks"
+          : "tasks";
     el.meta.innerHTML =
-      chip("todo", tasks.length - done - active) +
+      chip("todo", scope.length - done - active) +
       chip("in_progress", active) +
       chip("done", done) +
-      `<span class="chip">${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}</span>`;
-
-    const view = layout(tasks);
+      `<span class="chip">${listed.length} ${countLabel}</span>`;
 
     const live = new Set([...view.values()].map((v) => v.key));
     const stale = [...collapsed].filter((key) => !live.has(key));
@@ -157,19 +353,46 @@
     }
 
     el.list.innerHTML = "";
-    el.empty.classList.toggle("hidden", tasks.length > 0);
-
-    let hideBelow = Infinity;
-    for (const task of tasks) {
-      const v = view.get(task.line);
-      if (v.depth > hideBelow) {
-        continue;
-      }
-      hideBelow = v.collapsed ? v.depth : Infinity;
-      el.list.appendChild(renderRow(task, v));
+    el.empty.classList.toggle("hidden", listed.length > 0);
+    if (!listed.length) {
+      el.empty.querySelector("h2").textContent = inDetail ? "No subtasks yet" : "Nothing planned yet";
+      el.empty.querySelector("p").textContent = inDetail
+        ? "Add a subtask below."
+        : "Add a task below.";
     }
 
-    shown = JSON.stringify(plan);
+    if (inDetail) {
+      const base = view.get(focused.line)?.depth ?? 0;
+      for (const task of listed) {
+        const v = view.get(task.line);
+        el.list.appendChild(
+          renderRow(task, {
+            depth: Math.max(0, v.depth - base - 1),
+            key: v.key,
+            children: v.children,
+            collapsed: false,
+          })
+        );
+      }
+    } else {
+      let hideBelow = Infinity;
+      for (const task of listed) {
+        const v = view.get(task.line);
+        if (v.depth > hideBelow) {
+          continue;
+        }
+        hideBelow = v.collapsed ? v.depth : Infinity;
+        el.list.appendChild(renderRow(task, v));
+      }
+    }
+
+    const addText = inDetail ? " Add subtask" : " Add task";
+    const textNodes = [...el.addTask.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE);
+    if (textNodes.length) {
+      textNodes[textNodes.length - 1].textContent = addText;
+    }
+
+    shown = JSON.stringify({ plan, focusLine });
   }
 
   /**
@@ -235,12 +458,19 @@
           run: () => setStatus(task, s),
         })),
         { separator: true },
+        { label: "View details", icon: DETAIL, run: () => navigateTo(task.line) },
         { label: "Rename", icon: PENCIL, run: () => editTask(row, task) },
         {
           label: "Delete",
           icon: TRASH,
           danger: true,
-          run: () => post({ t: "deleteTask", line: task.line }),
+          run: () => {
+            if (focusLine === task.line) {
+              focusLine = task.parent;
+              persist();
+            }
+            post({ t: "deleteTask", line: task.line });
+          },
         },
       ])
     );
@@ -282,8 +512,20 @@
     post({ t: "status", line: task.line, status });
   }
 
-  /** Begin editing the project title. */
+  /** Begin editing the project title, or the focused task title in detail view. */
   function editTitle() {
+    const focused = focusedTask();
+    if (focused) {
+      edit(el.title, focused.title, (value) => {
+        if (value === focused.title) {
+          return false;
+        }
+        focused.title = value;
+        post({ t: "text", line: focused.line, text: value });
+        return true;
+      });
+      return;
+    }
     edit(el.title, plan.title, (value) => {
       if (value === plan.title) {
         return false;
@@ -294,8 +536,20 @@
     });
   }
 
-  /** Begin editing the project description. */
+  /** Begin editing the plan description (root) or task description (detail). */
   function editDescription() {
+    const focused = focusedTask();
+    if (focused) {
+      editArea(el.description, focused.description || "", (value) => {
+        if (value === focused.description) {
+          return false;
+        }
+        focused.description = value;
+        post({ t: "taskDescription", line: focused.line, text: value });
+        return true;
+      });
+      return;
+    }
     edit(el.description, plan.description, (value) => {
       if (value === plan.description) {
         return false;
@@ -303,6 +557,59 @@
       plan.description = value;
       post({ t: "description", text: value });
       return true;
+    });
+  }
+
+  /**
+   * Multiline editor for task descriptions.
+   * @param {HTMLElement|null} label
+   * @param {string} initial
+   * @param {(value: string) => boolean} commit
+   */
+  function editArea(label, initial, commit) {
+    if (!label || activeInput) {
+      return;
+    }
+    closeMenu();
+
+    const input = document.createElement("textarea");
+    input.className = "inline-input inline-area";
+    input.value = initial;
+    input.spellcheck = false;
+    input.rows = 4;
+    label.replaceWith(input);
+    input.scrollIntoView({ block: "nearest" });
+    input.focus();
+    activeInput = input;
+
+    let settled = false;
+    const finish = (save) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeInput = null;
+      input.replaceWith(label);
+
+      if (save && commit(input.value.replace(/\s+$/g, "").replace(/^\n+/g, ""))) {
+        queuedPlan = null;
+      } else if (queuedPlan) {
+        plan = queuedPlan;
+        queuedPlan = null;
+      }
+      render();
+    };
+
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        finish(true);
+      }
     });
   }
 
@@ -448,16 +755,28 @@
   /* ---------- wiring ---------- */
 
   el.title.addEventListener("click", editTitle);
-  el.description.addEventListener("click", editDescription);
+  el.description.addEventListener("click", (e) => {
+    if (e.target && e.target.closest && e.target.closest("a")) {
+      return;
+    }
+    editDescription();
+  });
 
   el.addTask.addEventListener("click", () => {
-    focusAfterRender = { childOf: null };
-    post({ t: "addTask", parent: null });
+    focusAfterRender = { childOf: focusLine };
+    post({ t: "addTask", parent: focusLine });
   });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      closeMenu();
+      if (menu) {
+        closeMenu();
+        return;
+      }
+      if (!activeInput && focusLine !== null) {
+        const focused = focusedTask();
+        navigateTo(focused ? focused.parent : null);
+      }
       return;
     }
     // While typing in an inline field, let the browser undo local keystrokes.
@@ -480,10 +799,12 @@
       queuedPlan = e.data;
       return;
     }
-    if (JSON.stringify(e.data) === shown) {
+    const fingerprint = JSON.stringify({ plan: e.data, focusLine });
+    if (fingerprint === shown) {
       return;
     }
     plan = e.data;
+    reconcileNav();
     render();
     applyFocus();
     focusAfterRender = null;

@@ -13,6 +13,12 @@ export interface Task {
   status: Status;
   /** Parent task's line, or `null` for a top-level task. */
   parent: number | null;
+  /** Body beneath the checkbox until the next task; may contain newlines. */
+  description: string;
+  /** First description line, or `-1` if none. */
+  descriptionLine: number;
+  /** Last description line (inclusive), or `-1` if none. */
+  descriptionEnd: number;
 }
 
 /** Parsed contents of a `.pln` document. */
@@ -53,9 +59,28 @@ function indentOf(raw: string): number {
   return n;
 }
 
+/** Strip leading whitespace up to `width` (`tab` counts as 2), matching {@link indentOf}. */
+function stripIndent(raw: string, width: number): string {
+  let n = 0;
+  let i = 0;
+  while (i < raw.length && n < width) {
+    if (raw[i] === " ") {
+      n += 1;
+      i += 1;
+    } else if (raw[i] === "\t") {
+      n += 2;
+      i += 1;
+    } else {
+      break;
+    }
+  }
+  return raw.slice(i);
+}
+
 /**
  * Parse a `.pln` file into a {@link Plan}.
- * Indentation defines parent/child; `#` is the title; first prose before tasks is the description.
+ * Indentation defines parent/child; `#` is the title; first prose before tasks is the plan description.
+ * Non-checkbox lines after a task belong to that task’s description until the next checkbox task.
  * @param _fallbackTitle Unused; kept so call sites stay stable. Missing titles are `""`.
  */
 export function parsePlan(text: string, _fallbackTitle = ""): Plan {
@@ -68,10 +93,38 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
   };
   /** Open ancestors, shallowest first — parent is the nearest less-indented task. */
   const open: { indent: number; line: number }[] = [];
+  /** Raw description lines for the most recent task (document order). */
+  let pending: { taskIndex: number; lines: { line: number; raw: string }[] } | null = null;
+
+  const flushDescription = () => {
+    if (!pending) {
+      return;
+    }
+    const task = plan.tasks[pending.taskIndex];
+    const rows = pending.lines;
+    let start = 0;
+    let end = rows.length;
+    while (start < end && !rows[start].raw.trim()) {
+      start += 1;
+    }
+    while (end > start && !rows[end - 1].raw.trim()) {
+      end -= 1;
+    }
+    const slice = rows.slice(start, end);
+    if (slice.length) {
+      const widths = slice.filter((r) => r.raw.trim()).map((r) => indentOf(r.raw));
+      const base = widths.length ? Math.min(...widths) : 0;
+      task.description = slice.map((r) => stripIndent(r.raw, base)).join("\n");
+      task.descriptionLine = slice[0].line;
+      task.descriptionEnd = slice[slice.length - 1].line;
+    }
+    pending = null;
+  };
 
   text.split(/\r?\n/).forEach((raw, i) => {
     const task = TASK.exec(raw);
     if (task) {
+      flushDescription();
       const indent = indentOf(raw);
       while (open.length && open[open.length - 1].indent >= indent) {
         open.pop();
@@ -81,8 +134,16 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
         title: task[2] ?? "",
         status: statusOf(task[1]),
         parent: open.length ? open[open.length - 1].line : null,
+        description: "",
+        descriptionLine: -1,
+        descriptionEnd: -1,
       });
       open.push({ indent, line: i });
+      pending = { taskIndex: plan.tasks.length - 1, lines: [] };
+      return;
+    }
+    if (pending) {
+      pending.lines.push({ line: i, raw });
       return;
     }
     const title = TITLE.exec(raw);
@@ -103,6 +164,7 @@ export function parsePlan(text: string, _fallbackTitle = ""): Plan {
     }
   });
 
+  flushDescription();
   return plan;
 }
 
@@ -116,6 +178,37 @@ function descendants(plan: Plan, line: number): Task[] {
     }
     return false;
   });
+}
+
+/**
+ * Last document line owned by `line`’s task: its description and all nested
+ * descendants (and their descriptions).
+ */
+export function blockEnd(plan: Plan, line: number): number {
+  const task = plan.tasks.find((t) => t.line === line);
+  if (!task) {
+    return line;
+  }
+  let end = task.descriptionEnd >= 0 ? task.descriptionEnd : task.line;
+  for (const child of descendants(plan, line)) {
+    const childEnd = child.descriptionEnd >= 0 ? child.descriptionEnd : child.line;
+    if (childEnd > end) {
+      end = childEnd;
+    }
+  }
+  return end;
+}
+
+/** Format a description body with `prefix` on non-empty lines. */
+function formatDescription(text: string, prefix: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\n+$/g, "").replace(/^\n+/g, "");
+  if (!normalized) {
+    return "";
+  }
+  return normalized
+    .split("\n")
+    .map((line) => (line.trim() === "" ? "" : prefix + line))
+    .join("\n");
 }
 
 /** Nesting depth of each task, keyed by line. */
@@ -237,8 +330,11 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
           edit.insert(doc.uri, last.range.end, `${last.text.trim() ? "\n" : ""}- [ ]`);
           break;
         }
-        const below = descendants(plan, m.parent);
-        const after = below.length ? below[below.length - 1].line : m.parent;
+        const parent = plan.tasks.find((t) => t.line === m.parent);
+        if (!parent) {
+          return false;
+        }
+        const after = blockEnd(plan, m.parent);
         const depth = (depths(plan).get(m.parent) ?? 0) + 1;
         edit.insert(doc.uri, at(after).range.end, `\n${INDENT.repeat(depth)}- [ ]`);
         break;
@@ -274,6 +370,31 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         );
         break;
       }
+      case "taskDescription": {
+        const task = plan.tasks.find((t) => t.line === m.line);
+        if (!task || typeof m.text !== "string") {
+          return false;
+        }
+        const lead = (at(task.line).text.match(/^[ \t]*/) || [""])[0] + INDENT;
+        const body = formatDescription(m.text, lead);
+        if (task.descriptionLine >= 0 && task.descriptionEnd >= 0) {
+          if (!body) {
+            edit.delete(doc.uri, lineSpan(doc, task.descriptionLine, task.descriptionEnd));
+          } else {
+            const last = at(task.descriptionEnd);
+            edit.replace(
+              doc.uri,
+              new vscode.Range(task.descriptionLine, 0, task.descriptionEnd, last.text.length),
+              body
+            );
+          }
+        } else if (body) {
+          edit.insert(doc.uri, at(task.line).range.end, `\n${body}`);
+        } else {
+          return false;
+        }
+        break;
+      }
       default:
         return false;
     }
@@ -282,7 +403,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Delete a task and its descendants.
+   * Delete a task, its description, and its descendants.
    * Confirms first when the task has subtasks.
    */
   private async deleteTask(doc: vscode.TextDocument, line: number): Promise<boolean> {
@@ -306,8 +427,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     }
 
     const edit = new vscode.WorkspaceEdit();
-    const end = below.length ? below[below.length - 1].line : line;
-    edit.delete(doc.uri, lineSpan(doc, line, end));
+    edit.delete(doc.uri, lineSpan(doc, line, blockEnd(plan, line)));
     return vscode.workspace.applyEdit(edit);
   }
 }
@@ -327,6 +447,7 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
   <title>Plan</title>
 </head>
 <body>
+  <nav id="crumb" class="crumb" aria-label="Breadcrumb"></nav>
   <section class="hero">
     <div class="hero-top">
       <h1 id="title">Plan</h1>
@@ -338,7 +459,7 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
         <span id="pct">0%</span>
       </div>
     </div>
-    <p class="hero-desc" id="description"></p>
+    <div class="hero-desc" id="description"></div>
     <div class="hero-meta" id="meta"></div>
   </section>
 

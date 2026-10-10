@@ -4,16 +4,20 @@
 Everything required to prepare the product for public release.
 
 - [-] Research
+  Understand who we are building for and what already exists.
   - [x] Define target audience
   - [-] Review competitive landscape
+    Capture pricing, positioning, and gaps worth exploiting.
     - [ ] Summarise the pricing study
 - [ ] Design
   - [ ] Map information architecture
   - [x] Hand off design tokens
   - [ ] Polish the empty states
 - [-] Engineering
+  Ship the core product paths needed for a public launch.
   - [x] Set up the CI pipeline
   - [-] Implement onboarding flow
+    Guide a new user from signup to their first successful action.
     - [x] Wire up the API
     - [ ] Add the welcome screen
   - [ ] Integrate billing
