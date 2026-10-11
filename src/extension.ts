@@ -1,5 +1,4 @@
 import { randomUUID } from "crypto";
-import * as path from "path";
 import * as vscode from "vscode";
 
 /** Task checkbox state written as `[ ]`, `[-]`, or `[x]`. */
@@ -83,9 +82,9 @@ function stripIndent(raw: string, width: number): string {
  * Parse a `.pln` file into a {@link Plan}.
  * Indentation defines parent/child; `#` is the title; first prose before tasks is the plan description.
  * Non-checkbox lines after a task belong to that task’s description until the next checkbox task.
- * @param _fallbackTitle Unused; kept so call sites stay stable. Missing titles are `""`.
+ * Missing titles are `""`.
  */
-export function parsePlan(text: string, _fallbackTitle = ""): Plan {
+export function parsePlan(text: string): Plan {
   const plan: Plan = {
     title: "",
     titleLine: -1,
@@ -220,9 +219,29 @@ export function blockEnd(plan: Plan, line: number): number {
   return end;
 }
 
+/**
+ * Markdown for `line`’s task and nested descendants, rebased to column 0.
+ * @returns `null` if `line` is not a task.
+ */
+export function taskMarkdown(text: string, line: number): string | null {
+  const plan = parsePlan(text);
+  if (!plan.tasks.some((t) => t.line === line)) {
+    return null;
+  }
+  const lines = text.split(/\r?\n/).slice(line, blockEnd(plan, line) + 1);
+  const base = indentOf(lines[0] ?? "");
+  return lines.map((row) => stripIndent(row, base)).join("\n");
+}
+
+/** Normalize CRLF and trim leading/trailing blank lines from a description body. */
+function normalizeDescription(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\n+$/g, "").replace(/^\n+/g, "");
+  return normalized.trim() === "" ? "" : normalized;
+}
+
 /** Format a description body with `prefix` on non-empty lines. */
 function formatDescription(text: string, prefix: string): string {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\n+$/g, "").replace(/^\n+/g, "");
+  const normalized = normalizeDescription(text);
   if (!normalized) {
     return "";
   }
@@ -342,7 +361,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     const send = () => {
       const text = doc.getText();
       panel.webview.postMessage({
-        ...parsePlan(text, path.basename(doc.fileName, ".pln")),
+        ...parsePlan(text),
         source: text,
       });
     };
@@ -380,6 +399,13 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         setRawContext(docKey, m.mode === "raw");
         return;
       }
+      if (m.t === "copyTask") {
+        const md = taskMarkdown(doc.getText(), m.line);
+        if (md !== null) {
+          await vscode.env.clipboard.writeText(md);
+        }
+        return;
+      }
       if (m.t === "ready" || !(await this.edit(doc, m))) {
         send();
       }
@@ -387,9 +413,9 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Apply a webview message as a {@link vscode.WorkspaceEdit}.
-   * Undo/redo run VS Code's native commands so the text-document stack is used.
-   * @returns `false` if the message was rejected (webview should resync).
+   * Apply a webview edit message (`undo`/`redo`/`deleteTask`/`title`/`description`/
+   * `addTask`/`status`/`text`/`taskDescription`/`source`). Unknown `t` → `false` (resync).
+   * @returns `false` if rejected (webview should resync).
    */
   private async edit(doc: vscode.TextDocument, m: any): Promise<boolean> {
     if (m.t === "undo") {
@@ -406,7 +432,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
 
     const edit = new vscode.WorkspaceEdit();
     const at = (n: number) => doc.lineAt(Math.max(0, Math.min(n, doc.lineCount - 1)));
-    const plan = parsePlan(doc.getText(), "");
+    const plan = parsePlan(doc.getText());
 
     switch (m.t) {
       case "title": {
@@ -430,7 +456,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         if (typeof m.text !== "string") {
           return false;
         }
-        const text = m.text.replace(/\r\n/g, "\n").replace(/\n+$/g, "").replace(/^\n+/g, "");
+        const text = normalizeDescription(m.text);
         const end =
           plan.descriptionEnd >= 0 ? plan.descriptionEnd : plan.descriptionLine;
         if (plan.descriptionLine >= 0 && end >= 0) {
@@ -550,7 +576,7 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
    * Confirms first when the task has subtasks.
    */
   private async deleteTask(doc: vscode.TextDocument, line: number): Promise<boolean> {
-    const plan = parsePlan(doc.getText(), "");
+    const plan = parsePlan(doc.getText());
     const task = plan.tasks.find((i) => i.line === line);
     if (!task) {
       return false;

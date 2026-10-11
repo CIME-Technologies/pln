@@ -737,15 +737,6 @@ body.raw-mode .raw {
   line-height: 1.6;
 }
 
-.empty code {
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 1.5px 5px;
-  border-radius: 4px;
-  background: var(--bg-chip);
-  color: var(--text-2);
-}
-
 .hidden {
   display: none !important;
 }

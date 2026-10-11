@@ -8,7 +8,6 @@
   const el = {
     crumb: $("crumb"),
     raw: $("raw"),
-    editor: $("editor"),
     title: $("title"),
     description: $("description"),
     meta: $("meta"),
@@ -34,7 +33,7 @@
   const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine, rawMode });
 
   let plan = { title: "Plan", description: "", tasks: [] };
-  /** Full `.pln` source text for the Raw view. */
+  /** Full `.pln` source text for the Markdown. */
   let source = "";
   let menu = null;
   /**
@@ -103,7 +102,11 @@
     "0 0 12 12"
   );
   const DETAIL = svg(
-    `<path d="M2.5 3.5h9v7h-9z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4.5 6h5M4.5 8h3.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>`,
+    `<path d="M1.5 6s1.8-3.2 4.5-3.2S10.5 6 10.5 6s-1.8 3.2-4.5 3.2S1.5 6 1.5 6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="6" cy="6" r="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/>`,
+    "0 0 12 12"
+  );
+  const COPY = svg(
+    `<rect x="4" y="2.5" width="5.5" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2.5 4.5v5.5a1 1 0 0 0 1 1H8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>`,
     "0 0 12 12"
   );
 
@@ -157,7 +160,7 @@
     render();
   }
 
-  /** Drop focus to the nearest surviving ancestor (or root) if the line is gone. */
+  /** Clear focus back to the plan root if the focused line is gone. */
   function reconcileNav() {
     if (focusLine === null) {
       return;
@@ -282,7 +285,7 @@
     return view;
   }
 
-  /** Apply host payload: plan fields + optional `source` for Raw view. */
+  /** Apply host payload: plan fields + optional `source` for Markdown. */
   function applyPayload(data) {
     source = typeof data.source === "string" ? data.source : source;
     const next = { ...data };
@@ -308,6 +311,13 @@
     post({ t: "source", text });
   }
 
+  /** Sync the raw textarea from `source` without clobbering in-progress typing. */
+  function syncRawTextarea() {
+    if (!rawDirty && el.raw.value !== source) {
+      el.raw.value = source;
+    }
+  }
+
   function setRawMode(on) {
     const next = !!on;
     if (rawMode && !next) {
@@ -323,9 +333,20 @@
     }
     if (rawMode) {
       closeMenu();
-      if (!rawDirty && el.raw.value !== source) {
-        el.raw.value = source;
-      }
+      syncRawTextarea();
+    }
+  }
+
+  /** Paint hero title/description for root or detail (caller picks the values). */
+  function paintHero(title, description) {
+    el.title.textContent = title || "Untitled";
+    el.title.classList.toggle("placeholder", !title);
+    if (description) {
+      el.description.classList.remove("placeholder");
+      el.description.innerHTML = renderMarkdown(description);
+    } else {
+      el.description.classList.add("placeholder");
+      el.description.textContent = "Add a description…";
     }
   }
 
@@ -336,10 +357,7 @@
     setRawMode(rawMode);
 
     if (rawMode) {
-      // Don't clobber in-progress typing when the host echoes our own edit.
-      if (!rawDirty && el.raw.value !== source) {
-        el.raw.value = source;
-      }
+      syncRawTextarea();
       shown = JSON.stringify({ plan, focusLine, source, rawMode });
       return;
     }
@@ -372,27 +390,10 @@
 
     renderBreadcrumb();
 
-    el.description.classList.remove("hidden");
     if (inDetail) {
-      el.title.textContent = focused.title || "Untitled";
-      el.title.classList.toggle("placeholder", !focused.title);
-      if (focused.description) {
-        el.description.classList.remove("placeholder");
-        el.description.innerHTML = renderMarkdown(focused.description);
-      } else {
-        el.description.classList.add("placeholder");
-        el.description.textContent = "Add a description…";
-      }
+      paintHero(focused.title, focused.description);
     } else {
-      el.title.textContent = plan.title || "Untitled";
-      el.title.classList.toggle("placeholder", !plan.title);
-      if (plan.description) {
-        el.description.classList.remove("placeholder");
-        el.description.innerHTML = renderMarkdown(plan.description);
-      } else {
-        el.description.classList.add("placeholder");
-        el.description.textContent = "Add a description…";
-      }
+      paintHero(plan.title, plan.description);
     }
 
     el.pct.textContent = `${Math.round(ratio * 100)}%`;
@@ -525,6 +526,11 @@
           run: () => setStatus(task, s),
         })),
         { separator: true },
+        {
+          label: "Copy task",
+          icon: COPY,
+          run: () => post({ t: "copyTask", line: task.line }),
+        },
         { label: "View details", icon: DETAIL, run: () => navigateTo(task.line) },
         { label: "Rename", icon: PENCIL, run: () => editTask(row, task) },
         {
@@ -630,6 +636,27 @@
   }
 
   /**
+   * Finish an inline edit: restore the label, apply or drop a queued plan push, repaint.
+   * Kept separate from control creation so `<input>` and `<textarea>` editors stay distinct.
+   * @param {HTMLElement} label
+   * @param {HTMLElement} input
+   * @param {boolean} save
+   * @param {string} value
+   * @param {(value: string) => boolean} commit
+   */
+  function finishInline(label, input, save, value, commit) {
+    activeInput = null;
+    input.replaceWith(label);
+    if (save && commit(value)) {
+      queuedPlan = null;
+    } else if (queuedPlan) {
+      applyPayload(queuedPlan);
+      queuedPlan = null;
+    }
+    render();
+  }
+
+  /**
    * Auto-growing textarea editor for titles and descriptions.
    * @param {HTMLElement|null} label
    * @param {string} initial
@@ -671,19 +698,10 @@
         return;
       }
       settled = true;
-      activeInput = null;
-      input.replaceWith(label);
-
       const raw = singleLine
         ? input.value
         : input.value.replace(/\s+$/g, "").replace(/^\n+/g, "");
-      if (save && commit(raw)) {
-        queuedPlan = null;
-      } else if (queuedPlan) {
-        applyPayload(queuedPlan);
-        queuedPlan = null;
-      }
-      render();
+      finishInline(label, input, save, raw, commit);
     };
 
     input.addEventListener("click", (e) => e.stopPropagation());
@@ -744,16 +762,7 @@
         return;
       }
       settled = true;
-      activeInput = null;
-      input.replaceWith(label);
-
-      if (save && commit(input.value.trim())) {
-        queuedPlan = null;
-      } else if (queuedPlan) {
-        applyPayload(queuedPlan);
-        queuedPlan = null;
-      }
-      render();
+      finishInline(label, input, save, input.value.trim(), commit);
     };
 
     input.addEventListener("click", (e) => e.stopPropagation());

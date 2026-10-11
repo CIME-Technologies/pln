@@ -49,12 +49,12 @@
     "commands": [
       {
         "command": "pln.view.enterRaw",
-        "title": "Raw View",
+        "title": "Markdown",
         "icon": "$(code)"
       },
       {
         "command": "pln.view.exitRaw",
-        "title": "Exit Raw View",
+        "title": "Exit Markdown",
         "icon": "$(open-preview)"
       }
     ],
@@ -78,7 +78,8 @@
     "watch": "npm run compile -- --watch",
     "check": "tsc --noEmit",
     "git": "git add . && printf 'Commit message [update]: ' && read msg && git commit -m \"${msg:-update}\" && git push",
-    "package": "npx @vscode/vsce package",
+    "package:local": "npm run compile && mkdir -p dist && npx @vscode/vsce package --out \"./dist/${npm_package_name}.vsix\" && cursor --install-extension \"./dist/${npm_package_name}.vsix\" --force",
+    "package": "npm run compile && npx @vscode/vsce package",
     "test": "npm run compile && node --test test/plan.test.js"
   },
   "devDependencies": {

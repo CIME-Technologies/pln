@@ -145,13 +145,21 @@ const vscode = {
       },
     },
   },
+  env: {
+    clipboard: {
+      text: "",
+      writeText: async (text) => {
+        vscode.env.clipboard.text = text;
+      },
+    },
+  },
 };
 
 const load = Module._load;
 Module._load = (request, ...rest) =>
   request === "vscode" ? vscode : load.call(Module, request, ...rest);
 
-const { activate, parsePlan, blockEnd } = require("../out/extension.js");
+const { activate, parsePlan, blockEnd, taskMarkdown } = require("../out/extension.js");
 
 /* ---------- harness ---------- */
 
@@ -216,7 +224,7 @@ function outline(plan) {
 /* ---------- parsing ---------- */
 
 test("parses the project title, description, and the three statuses", () => {
-  const plan = parsePlan(SAMPLE, "fallback");
+  const plan = parsePlan(SAMPLE);
   assert.strictEqual(plan.title, "Demo");
   assert.strictEqual(plan.titleLine, 0);
   assert.strictEqual(plan.description, "A short plan.");
@@ -232,7 +240,7 @@ test("parses the project title, description, and the three statuses", () => {
 });
 
 test("a task carries a title, status, parent, and description fields", () => {
-  assert.deepStrictEqual(parsePlan("- [ ] A\n  - [x] B\n", "x").tasks, [
+  assert.deepStrictEqual(parsePlan("- [ ] A\n  - [x] B\n").tasks, [
     {
       line: 0,
       title: "A",
@@ -255,12 +263,12 @@ test("a task carries a title, status, parent, and description fields", () => {
 });
 
 test("a missing title is empty rather than invented from the file name", () => {
-  assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").title, "");
-  assert.strictEqual(parsePlan("- [ ] x\n", "my-plan").titleLine, -1);
+  assert.strictEqual(parsePlan("- [ ] x\n").title, "");
+  assert.strictEqual(parsePlan("- [ ] x\n").titleLine, -1);
 });
 
 test("nests subtasks several levels deep", () => {
-  const plan = parsePlan("- [ ] a\n  - [ ] b\n    - [ ] c\n      - [x] d\n- [ ] e\n", "x");
+  const plan = parsePlan("- [ ] a\n  - [ ] b\n    - [ ] c\n      - [x] d\n- [ ] e\n");
   assert.deepStrictEqual(
     plan.tasks.map((i) => [i.title, i.parent]),
     [
@@ -274,7 +282,7 @@ test("nests subtasks several levels deep", () => {
 });
 
 test("re-parents correctly when indentation steps back out", () => {
-  const plan = parsePlan("- [ ] a\n    - [ ] b\n        - [ ] c\n    - [ ] d\n- [ ] e\n", "x");
+  const plan = parsePlan("- [ ] a\n    - [ ] b\n        - [ ] c\n    - [ ] d\n- [ ] e\n");
   assert.deepStrictEqual(outline(plan), [
     ["a", "todo", 0],
     ["b", "todo", 1],
@@ -288,7 +296,7 @@ test("accepts any consistent indentation width, including tabs", () => {
   for (const unit of ["  ", "    ", "\t", " "]) {
     const text = `- [ ] a\n${unit}- [ ] b\n${unit}- [ ] c\n${unit}${unit}- [ ] d\n`;
     assert.deepStrictEqual(
-      parsePlan(text, "x").tasks.map((i) => i.parent),
+      parsePlan(text).tasks.map((i) => i.parent),
       [null, 0, 0, 2],
       JSON.stringify(unit)
     );
@@ -297,7 +305,7 @@ test("accepts any consistent indentation width, including tabs", () => {
 
 test("parses task titles containing spaces and punctuation", () => {
   assert.deepStrictEqual(
-    parsePlan("- [ ] Engineering & Infrastructure\n  - [x] Final  QA\n", "x").tasks.map(
+    parsePlan("- [ ] Engineering & Infrastructure\n  - [x] Final  QA\n").tasks.map(
       (i) => i.title
     ),
     ["Engineering & Infrastructure", "Final  QA"]
@@ -306,7 +314,7 @@ test("parses task titles containing spaces and punctuation", () => {
 
 test("leaves the description empty when there is none", () => {
   for (const text of ["# Launch\n\n- [ ] a\n", "# Launch\n- [ ] a\nnot a description\n", "- [ ] a\n"]) {
-    const plan = parsePlan(text, "x");
+    const plan = parsePlan(text);
     assert.strictEqual(plan.description, "", JSON.stringify(text));
     assert.strictEqual(plan.descriptionLine, -1);
     assert.strictEqual(plan.descriptionEnd, -1);
@@ -315,16 +323,14 @@ test("leaves the description empty when there is none", () => {
 
 test("parses a multiline plan description", () => {
   const plan = parsePlan(
-    "# Launch\n\nGoal: ship it.\n>\n> More detail here.\n\n- [ ] First\n",
-    "x"
-  );
+    "# Launch\n\nGoal: ship it.\n>\n> More detail here.\n\n- [ ] First\n");
   assert.strictEqual(plan.description, "Goal: ship it.\n>\n> More detail here.");
   assert.strictEqual(plan.descriptionLine, 2);
   assert.strictEqual(plan.descriptionEnd, 4);
 });
 
 test("handles empty and malformed content without throwing", () => {
-  assert.deepStrictEqual(parsePlan("", "empty"), {
+  assert.deepStrictEqual(parsePlan(""), {
     title: "",
     titleLine: -1,
     description: "",
@@ -334,12 +340,12 @@ test("handles empty and malformed content without throwing", () => {
   });
 
   assert.deepStrictEqual(
-    parsePlan("- [ ] orphan\n- plain bullet\n- [ ]x\nrandom text\n", "x").tasks.map((i) => i.title),
+    parsePlan("- [ ] orphan\n- plain bullet\n- [ ]x\nrandom text\n").tasks.map((i) => i.title),
     ["orphan"],
     "non-checkbox lines are ignored"
   );
 
-  assert.deepStrictEqual(parsePlan("- [ ]\n", "x").tasks[0], {
+  assert.deepStrictEqual(parsePlan("- [ ]\n").tasks[0], {
     line: 0,
     title: "",
     status: "todo",
@@ -350,7 +356,7 @@ test("handles empty and malformed content without throwing", () => {
   });
 
   assert.strictEqual(
-    parsePlan("  * [X] starred\n", "x").tasks[0].status,
+    parsePlan("  * [X] starred\n").tasks[0].status,
     "done",
     "alternate markers and uppercase X are accepted"
   );
@@ -359,7 +365,7 @@ test("handles empty and malformed content without throwing", () => {
 /* ---------- sections are gone ---------- */
 
 test("heading lines are not treated as structure", () => {
-  const plan = parsePlan("# T\n\n## Alpha\n\n- [ ] a\n  - [ ] b\n", "x");
+  const plan = parsePlan("# T\n\n## Alpha\n\n- [ ] a\n  - [ ] b\n");
   assert.strictEqual(plan.title, "T");
   assert.strictEqual(plan.description, "", "a heading is never read as the description");
   assert.deepStrictEqual(outline(plan), [
@@ -407,6 +413,8 @@ test("the webview has a persistent breadcrumb and a View details menu action", (
   const fs = require("node:fs");
   const ui = fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
   assert.match(ui, /View details/);
+  assert.match(ui, /Copy task/);
+  assert.match(ui, /copyTask/);
   assert.match(ui, /renderBreadcrumb/);
   assert.match(ui, /navigateTo\(task\.line\)/);
 });
@@ -434,8 +442,8 @@ test("raw source edits replace the whole document", () => {
   const next = "# Renamed\n\n- [ ] Solo\n";
   ed.send({ t: "source", text: next });
   assert.strictEqual(ed.text, next);
-  assert.strictEqual(parsePlan(ed.text, "x").title, "Renamed");
-  assert.strictEqual(parsePlan(ed.text, "x").tasks.length, 1);
+  assert.strictEqual(parsePlan(ed.text).title, "Renamed");
+  assert.strictEqual(parsePlan(ed.text).tasks.length, 1);
 });
 
 /* ---------- opening ---------- */
@@ -491,7 +499,7 @@ test("renames a task without touching its status or parent", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "text", line: 5, text: "renamed" });
   assert.strictEqual(ed.text.split("\n")[5], "  - [x] renamed");
-  assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
+  assert.deepStrictEqual(outline(parsePlan(ed.text)), [
     ["Alpha", "todo", 0],
     ["one", "todo", 1],
     ["renamed", "done", 1],
@@ -504,7 +512,7 @@ test("renaming keeps the indentation of a deeply nested task", () => {
   const ed = open("- [ ] a\n    - [ ] b\n        - [ ] c\n");
   ed.send({ t: "text", line: 2, text: "c renamed" });
   assert.strictEqual(ed.text, "- [ ] a\n    - [ ] b\n        - [ ] c renamed\n");
-  assert.strictEqual(parsePlan(ed.text, "x").tasks[2].parent, 1);
+  assert.strictEqual(parsePlan(ed.text).tasks[2].parent, 1);
 });
 
 test("naming an untitled task inserts the missing space", () => {
@@ -517,7 +525,7 @@ test("clearing a task title keeps the task as untitled", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "text", line: 3, text: "" });
   assert.match(ed.text.split("\n")[3], /^- \[ \] ?$/);
-  assert.deepStrictEqual(parsePlan(ed.text, "x").tasks[0], {
+  assert.deepStrictEqual(parsePlan(ed.text).tasks[0], {
     line: 3,
     title: "",
     status: "todo",
@@ -526,7 +534,7 @@ test("clearing a task title keeps the task as untitled", () => {
     descriptionLine: -1,
     descriptionEnd: -1,
   });
-  assert.strictEqual(parsePlan(ed.text, "x").tasks.length, 5);
+  assert.strictEqual(parsePlan(ed.text).tasks.length, 5);
 });
 
 test("renaming a task never appends another task", () => {
@@ -548,7 +556,7 @@ test("adds a top-level task at the end of the file", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "addTask", parent: null });
   assert.strictEqual(ed.text, SAMPLE + "- [ ]");
-  const plan = parsePlan(ed.text, "x");
+  const plan = parsePlan(ed.text);
   assert.strictEqual(plan.tasks[plan.tasks.length - 1].parent, null);
 });
 
@@ -568,7 +576,7 @@ test("adds a subtask below its parent's existing descendants", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "addTask", parent: 3 });
   assert.strictEqual(ed.text.split("\n").slice(3, 7).join("\n"), "- [ ] Alpha\n  - [ ] one\n  - [x] two\n  - [ ]");
-  const plan = parsePlan(ed.text, "x");
+  const plan = parsePlan(ed.text);
   assert.strictEqual(plan.tasks[3].parent, 3, "the new task belongs to Alpha");
 });
 
@@ -576,7 +584,7 @@ test("adds a subtask one level deeper than its parent", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "addTask", parent: 4 });
   assert.strictEqual(ed.text.split("\n")[5], "    - [ ]");
-  assert.strictEqual(parsePlan(ed.text, "x").tasks[2].parent, 4);
+  assert.strictEqual(parsePlan(ed.text).tasks[2].parent, 4);
 });
 
 test("adding a subtask skips a whole subtree, not just direct children", () => {
@@ -590,7 +598,7 @@ test("a new subtask can be named and persists", () => {
   ed.send({ t: "addTask", parent: 2 });
   ed.send({ t: "text", line: 3, text: "Call the design partners" });
   assert.strictEqual(ed.text, "# T\n\n- [ ] Parent\n  - [ ] Call the design partners\n");
-  assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
+  assert.deepStrictEqual(outline(parsePlan(ed.text)), [
     ["Parent", "todo", 0],
     ["Call the design partners", "todo", 1],
   ]);
@@ -641,7 +649,7 @@ test("edits the title in place", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "title", text: "Product Launch" });
   assert.strictEqual(ed.text.split("\n")[0], "# Product Launch");
-  assert.strictEqual(parsePlan(ed.text, "x").title, "Product Launch");
+  assert.strictEqual(parsePlan(ed.text).title, "Product Launch");
 });
 
 test("adds a title to a file that has none", () => {
@@ -654,7 +662,7 @@ test("clearing the title removes its heading and shows as untitled", () => {
   const ed = open(SAMPLE);
   ed.send({ t: "title", text: "   " });
   assert.strictEqual(ed.text, "A short plan.\n\n- [ ] Alpha\n  - [ ] one\n  - [x] two\n- [-] Omega\n  - [-] three\n");
-  const plan = parsePlan(ed.text, "x");
+  const plan = parsePlan(ed.text);
   assert.strictEqual(plan.title, "");
   assert.strictEqual(plan.titleLine, -1);
   assert.strictEqual(plan.description, "A short plan.");
@@ -670,7 +678,7 @@ test("writes a description under the title when there is none", () => {
   const ed = open("# Demo\n\n- [ ] a\n");
   ed.send({ t: "description", text: "Everything required to ship." });
   assert.strictEqual(ed.text, "# Demo\nEverything required to ship.\n\n- [ ] a\n");
-  assert.strictEqual(parsePlan(ed.text, "x").description, "Everything required to ship.");
+  assert.strictEqual(parsePlan(ed.text).description, "Everything required to ship.");
 });
 
 test("replaces an existing description", () => {
@@ -683,7 +691,7 @@ test("replaces a multiline plan description", () => {
   const ed = open("# Demo\nOld line.\nSecond line.\n\n- [ ] a\n");
   ed.send({ t: "description", text: "Goal: ship.\n>\n> Detail." });
   assert.strictEqual(ed.text, "# Demo\nGoal: ship.\n>\n> Detail.\n\n- [ ] a\n");
-  const plan = parsePlan(ed.text, "x");
+  const plan = parsePlan(ed.text);
   assert.strictEqual(plan.description, "Goal: ship.\n>\n> Detail.");
   assert.strictEqual(plan.descriptionEnd, 3);
 });
@@ -692,7 +700,7 @@ test("clearing the description removes its line", () => {
   const ed = open("# Demo\nOld words.\n\n- [ ] a\n");
   ed.send({ t: "description", text: "" });
   assert.strictEqual(ed.text, "# Demo\n\n- [ ] a\n");
-  assert.strictEqual(parsePlan(ed.text, "x").description, "");
+  assert.strictEqual(parsePlan(ed.text).description, "");
 });
 
 test("clearing an absent description is a no-op", () => {
@@ -701,12 +709,38 @@ test("clearing an absent description is a no-op", () => {
   assert.strictEqual(ed.text, "# Demo\n\n- [ ] a\n");
 });
 
+test("whitespace-only plan descriptions clear existing content", () => {
+  const ed = open("# Demo\nOld words.\n\n- [ ] a\n");
+  ed.send({ t: "description", text: "  \n\n  " });
+  assert.strictEqual(ed.text, "# Demo\n\n- [ ] a\n");
+  assert.strictEqual(parsePlan(ed.text).description, "");
+});
+
+test("plan descriptions normalize CRLF and surrounding blank lines", () => {
+  const ed = open("# Demo\n\n- [ ] a\n");
+  ed.send({ t: "description", text: "\r\nLine one.\r\nLine two.\r\n\r\n" });
+  assert.strictEqual(ed.text, "# Demo\nLine one.\nLine two.\n\n- [ ] a\n");
+  assert.strictEqual(parsePlan(ed.text).description, "Line one.\nLine two.");
+});
+
+test("whitespace-only task descriptions clear existing content", () => {
+  const ed = open("- [ ] Auth\n  Keep me.\n");
+  ed.send({ t: "taskDescription", line: 0, text: "\n  \n" });
+  assert.strictEqual(ed.text, "- [ ] Auth\n");
+});
+
+test("task descriptions normalize CRLF and surrounding blank lines", () => {
+  const ed = open("- [ ] Auth\n");
+  ed.send({ t: "taskDescription", line: 0, text: "\r\nFirst.\r\n\r\nSecond.\r\n" });
+  assert.strictEqual(ed.text, "- [ ] Auth\n  First.\n\n  Second.\n");
+});
+
 /* ---------- round trip ---------- */
 
 test("the bundled example survives a parse and reports its hierarchy", () => {
   const fs = require("node:fs");
   const text = fs.readFileSync(`${__dirname}/../examples/product-launch.pln`, "utf8");
-  const plan = parsePlan(text, "x");
+  const plan = parsePlan(text);
   assert.strictEqual(plan.title, "Product Launch");
   assert.ok(plan.description.length > 0);
   assert.ok(!/^##/m.test(text), "the example must not use sections");
@@ -723,7 +757,7 @@ test("editing never loses hierarchy, titles, or statuses", async () => {
   ed.send({ t: "status", line: 6, status: "done" });
   ed.send({ t: "addTask", parent: null });
   ed.send({ t: "text", line: 9, text: "Last" });
-  assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
+  assert.deepStrictEqual(outline(parsePlan(ed.text)), [
     ["Alpha", "todo", 0],
     ["one", "todo", 1],
     ["two", "done", 1],
@@ -770,7 +804,7 @@ test("multiple edits undo and redo in order without losing hierarchy", async () 
 
   await ed.send({ t: "undo" });
   assert.strictEqual(ed.text, SAMPLE);
-  assert.deepStrictEqual(outline(parsePlan(ed.text, "x")), [
+  assert.deepStrictEqual(outline(parsePlan(ed.text)), [
     ["Alpha", "todo", 0],
     ["one", "todo", 1],
     ["two", "done", 1],
@@ -804,9 +838,7 @@ test("parses multiline task descriptions and nested tasks", () => {
   Second paragraph.
   - [ ] Add login
     Create the login form.
-`,
-    "x"
-  );
+`);
   assert.strictEqual(
     plan.tasks[0].description,
     "First paragraph.\n\nSecond paragraph."
@@ -818,17 +850,39 @@ test("parses multiline task descriptions and nested tasks", () => {
 
 test("ordinary Markdown bullets are description text, not tasks", () => {
   const plan = parsePlan(
-    "- [ ] Parent\n  - plain bullet\n  - [ ] Real child\n",
-    "x"
-  );
+    "- [ ] Parent\n  - plain bullet\n  - [ ] Real child\n");
   assert.strictEqual(plan.tasks.length, 2);
   assert.strictEqual(plan.tasks[0].description, "- plain bullet");
 });
 
 test("blockEnd covers descriptions and descendants", () => {
-  const plan = parsePlan("- [ ] A\n  desc A\n  - [ ] B\n    desc B\n- [ ] C\n", "x");
+  const plan = parsePlan("- [ ] A\n  desc A\n  - [ ] B\n    desc B\n- [ ] C\n");
   assert.strictEqual(blockEnd(plan, 0), 3);
   assert.strictEqual(blockEnd(plan, 2), 3);
+});
+
+test("taskMarkdown copies a task with nested descendants, rebased to column 0", () => {
+  const text =
+    "- [ ] Keep\n- [-] Research\n  Understand the market.\n  - [x] Define audience\n  - [ ] Pricing\n    Capture gaps.\n    - [ ] Summarise\n- [ ] After\n";
+  assert.strictEqual(
+    taskMarkdown(text, 1),
+    "- [-] Research\n  Understand the market.\n  - [x] Define audience\n  - [ ] Pricing\n    Capture gaps.\n    - [ ] Summarise"
+  );
+  assert.strictEqual(
+    taskMarkdown(text, 4),
+    "- [ ] Pricing\n  Capture gaps.\n  - [ ] Summarise"
+  );
+  assert.strictEqual(taskMarkdown(text, 99), null);
+});
+
+test("copyTask writes the task markdown to the clipboard", async () => {
+  vscode.env.clipboard.text = "";
+  const ed = open(
+    "- [ ] Keep\n  - [-] Nested\n    Notes.\n    - [x] Leaf\n- [ ] After\n"
+  );
+  await ed.send({ t: "copyTask", line: 1 });
+  assert.strictEqual(vscode.env.clipboard.text, "- [-] Nested\n  Notes.\n  - [x] Leaf");
+  assert.strictEqual(ed.text, "- [ ] Keep\n  - [-] Nested\n    Notes.\n    - [x] Leaf\n- [ ] After\n");
 });
 
 test("writes and clears a task description", () => {
