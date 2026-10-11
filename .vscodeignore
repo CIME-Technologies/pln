@@ -8,3 +8,4 @@ docs/demo.gif
 tsconfig.json
 package-lock.json
 **/*.map
+.env

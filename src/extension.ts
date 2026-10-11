@@ -1,21 +1,29 @@
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 import {
-  INDENT,
   TASK,
-  TOKEN,
   blockEnd,
-  depths,
   descendants,
+  descriptionIndent,
   formatDescription,
   normalizeDescription,
   parsePlan,
+  statusToken,
+  taskInsertPrefix,
   taskMarkdown,
   type Status,
 } from "./plan";
 
 export type { Plan, Status, Task } from "./plan";
-export { blockEnd, parsePlan, taskMarkdown } from "./plan";
+export {
+  blockEnd,
+  descriptionIndent,
+  directChildProgress,
+  parsePlan,
+  statusToken,
+  taskInsertPrefix,
+  taskMarkdown,
+} from "./plan";
 
 const VIEW_PLAN = "pln.planEditor";
 const VIEW_TEXT = "default";
@@ -176,6 +184,9 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
           edit.delete(doc.uri, lineSpan(doc, plan.titleLine, plan.titleLine));
           break;
         }
+        if (plan.titleLine >= 0 && text === plan.title) {
+          return true;
+        }
         const heading = `# ${text}`;
         if (plan.titleLine < 0) {
           edit.insert(doc.uri, new vscode.Position(0, 0), `${heading}\n\n`);
@@ -192,6 +203,9 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         const end =
           plan.descriptionEnd >= 0 ? plan.descriptionEnd : plan.descriptionLine;
         if (plan.descriptionLine >= 0 && end >= 0) {
+          if (text === plan.description) {
+            return true;
+          }
           if (text) {
             const last = at(end);
             edit.replace(
@@ -212,37 +226,50 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         break;
       }
       case "addTask": {
-        if (m.parent === null || m.parent === undefined) {
+        const parentLine = m.parent === undefined ? null : m.parent;
+        const prefix = taskInsertPrefix(doc.getText(), parentLine);
+        if (parentLine === null) {
           const last = doc.lineAt(doc.lineCount - 1);
-          edit.insert(doc.uri, last.range.end, `${last.text.trim() ? "\n" : ""}- [ ]`);
+          edit.insert(doc.uri, last.range.end, `${last.text.trim() ? "\n" : ""}${prefix}`);
           break;
         }
-        const parent = plan.tasks.find((t) => t.line === m.parent);
-        if (!parent) {
+        if (!plan.tasks.some((t) => t.line === parentLine)) {
           return false;
         }
-        const after = blockEnd(plan, m.parent);
-        const depth = (depths(plan).get(m.parent) ?? 0) + 1;
-        edit.insert(doc.uri, at(after).range.end, `\n${INDENT.repeat(depth)}- [ ]`);
+        const after = blockEnd(plan, parentLine);
+        edit.insert(doc.uri, at(after).range.end, `\n${prefix}`);
         break;
       }
       case "status": {
         const line = at(m.line);
-        if (!TASK.test(line.text) || !(m.status in TOKEN)) {
+        if (
+          !TASK.test(line.text) ||
+          (m.status !== "todo" && m.status !== "in_progress" && m.status !== "done")
+        ) {
           return false;
         }
         const box = line.text.indexOf("[") + 1;
+        const current = line.text[box] ?? "";
+        const next = statusToken(m.status as Status, current);
+        if (current === next) {
+          return true;
+        }
         edit.replace(
           doc.uri,
           new vscode.Range(line.lineNumber, box, line.lineNumber, box + 1),
-          TOKEN[m.status as Status]
+          next
         );
         break;
       }
       case "text": {
         const line = at(m.line);
-        if (!TASK.test(line.text)) {
+        const match = TASK.exec(line.text);
+        if (!match) {
           return false;
+        }
+        const currentTitle = match[2] ?? "";
+        if (m.text === currentTitle) {
+          return true;
         }
         const afterBox = line.text.indexOf("]") + 1;
         let start = afterBox;
@@ -262,7 +289,15 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         if (!task || typeof m.text !== "string") {
           return false;
         }
-        const lead = (at(task.line).text.match(/^[ \t]*/) || [""])[0] + INDENT;
+        if (normalizeDescription(m.text) === task.description) {
+          return true;
+        }
+        const lead = descriptionIndent(
+          doc.getText(),
+          task.line,
+          task.descriptionLine,
+          task.descriptionEnd
+        );
         const body = formatDescription(m.text, lead);
         if (task.descriptionLine >= 0 && task.descriptionEnd >= 0) {
           if (!body) {

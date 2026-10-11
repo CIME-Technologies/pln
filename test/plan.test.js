@@ -59,8 +59,12 @@ class Doc {
       toString: () => `file:///tmp/${name}.pln`,
     };
   }
+  /** Document EOL; mirrors VS Code applying edits with the file's line endings. */
+  get eol() {
+    return this.text.includes("\r\n") ? "\r\n" : "\n";
+  }
   get lines() {
-    return this.text.split("\n");
+    return this.text.split(/\r?\n/);
   }
   get lineCount() {
     return this.lines.length;
@@ -74,14 +78,18 @@ class Doc {
     return this.text;
   }
   apply(edit) {
+    const eol = this.eol;
     const offset = (p) => {
       const lines = this.lines;
       assert.ok(p.line < lines.length && p.character <= lines[p.line].length, "bad position");
-      return lines.slice(0, p.line).reduce((n, l) => n + l.length + 1, 0) + p.character;
+      return lines.slice(0, p.line).reduce((n, l) => n + l.length + eol.length, 0) + p.character;
     };
+    const normalize = (text) => text.replace(/\r\n/g, "\n").replace(/\n/g, eol);
     for (const op of [...edit.ops].sort((a, b) => offset(b.range.start) - offset(a.range.start))) {
       this.text =
-        this.text.slice(0, offset(op.range.start)) + op.text + this.text.slice(offset(op.range.end));
+        this.text.slice(0, offset(op.range.start)) +
+        normalize(op.text) +
+        this.text.slice(offset(op.range.end));
     }
   }
 }
@@ -183,7 +191,16 @@ const load = Module._load;
 Module._load = (request, ...rest) =>
   request === "vscode" ? vscode : load.call(Module, request, ...rest);
 
-const { activate, parsePlan, blockEnd, taskMarkdown } = require("../out/extension.js");
+const {
+  activate,
+  parsePlan,
+  blockEnd,
+  taskMarkdown,
+  taskInsertPrefix,
+  statusToken,
+  descriptionIndent,
+  directChildProgress,
+} = require("../out/extension.js");
 
 /* ---------- harness ---------- */
 
@@ -957,4 +974,207 @@ test("title-bar Open as Markdown / Open as Plan call vscode.openWith", async () 
   await registeredCommands["pln.openPlan"]();
   assert.strictEqual(openWithCalls.length, 1);
   assert.strictEqual(openWithCalls[0][1], "pln.planEditor");
+});
+
+/* ---------- nesting style / formatting preservation ---------- */
+
+test("taskInsertPrefix matches 2-space, 4-space, and tab child indents", () => {
+  assert.strictEqual(taskInsertPrefix("- [ ] a\n  - [ ] b\n", 0), "  - [ ]");
+  assert.strictEqual(
+    taskInsertPrefix("- [ ] a\n    - [ ] b\n        - [ ] c\n", 1),
+    "        - [ ]"
+  );
+  assert.strictEqual(taskInsertPrefix("- [ ] a\n\t- [ ] b\n", 0), "\t- [ ]");
+  assert.strictEqual(taskInsertPrefix("- [ ] a\n\t- [ ] b\n", 1), "\t\t- [ ]");
+});
+
+test("taskInsertPrefix inherits bullet markers from siblings or parent", () => {
+  assert.strictEqual(taskInsertPrefix("* [ ] a\n  * [ ] b\n", 0), "  * [ ]");
+  assert.strictEqual(taskInsertPrefix("+ [ ] a\n", 0), "  + [ ]");
+  assert.strictEqual(taskInsertPrefix("* [ ] a\n* [ ] b\n", null), "* [ ]");
+});
+
+test("statusToken preserves uppercase X for done", () => {
+  assert.strictEqual(statusToken("done", "X"), "X");
+  assert.strictEqual(statusToken("done", "x"), "x");
+  assert.strictEqual(statusToken("done", " "), "x");
+  assert.strictEqual(statusToken("todo", "X"), " ");
+});
+
+test("adds a subtask with correct parent in a 4-space plan", () => {
+  const ed = open("- [ ] a\n    - [ ] b\n        - [ ] c\n");
+  ed.send({ t: "addTask", parent: 1 });
+  assert.strictEqual(
+    ed.text,
+    "- [ ] a\n    - [ ] b\n        - [ ] c\n        - [ ]\n"
+  );
+  const plan = parsePlan(ed.text);
+  const added = plan.tasks[plan.tasks.length - 1];
+  assert.strictEqual(added.parent, 1, "new task must be a child of b");
+  assert.strictEqual(added.title, "");
+});
+
+test("adds a subtask with correct parent in a tab-indented plan", () => {
+  const ed = open("- [ ] a\n\t- [ ] b\n");
+  ed.send({ t: "addTask", parent: 1 });
+  assert.strictEqual(ed.text, "- [ ] a\n\t- [ ] b\n\t\t- [ ]\n");
+  assert.strictEqual(parsePlan(ed.text).tasks[2].parent, 1);
+});
+
+test("adds a subtask using the sibling indent and bullet style", () => {
+  const ed = open("* [ ] a\n    * [ ] b\n");
+  ed.send({ t: "addTask", parent: 0 });
+  assert.strictEqual(ed.text, "* [ ] a\n    * [ ] b\n    * [ ]\n");
+  assert.strictEqual(parsePlan(ed.text).tasks[2].parent, 0);
+});
+
+test("top-level add inherits the root bullet marker", () => {
+  const ed = open("+ [ ] only\n");
+  ed.send({ t: "addTask", parent: null });
+  assert.strictEqual(ed.text, "+ [ ] only\n+ [ ]");
+});
+
+test("preserves uppercase X when setting status to done", () => {
+  const ed = open("- [X] Keep\n- [ ] Other\n");
+  ed.send({ t: "status", line: 0, status: "done" });
+  assert.strictEqual(ed.text, "- [X] Keep\n- [ ] Other\n");
+});
+
+test("setting done on a todo writes lowercase x", () => {
+  const ed = open("- [ ] Keep\n");
+  ed.send({ t: "status", line: 0, status: "done" });
+  assert.strictEqual(ed.text, "- [x] Keep\n");
+});
+
+test("status and rename preserve untouched lines including markers and blanks", () => {
+  const text = "* [ ] Alpha\n\n  + [X] beta\n\t- [-] gamma\n";
+  const ed = open(text);
+  ed.send({ t: "status", line: 0, status: "in_progress" });
+  ed.send({ t: "text", line: 2, text: "beta renamed" });
+  assert.strictEqual(
+    ed.text,
+    "* [-] Alpha\n\n  + [X] beta renamed\n\t- [-] gamma\n"
+  );
+});
+
+test("editing a task description keeps its existing indent style", () => {
+  const ed = open("- [ ] Auth\n    Keep four spaces.\n- [ ] Next\n");
+  ed.send({ t: "taskDescription", line: 0, text: "Still four spaces." });
+  assert.strictEqual(
+    ed.text,
+    "- [ ] Auth\n    Still four spaces.\n- [ ] Next\n"
+  );
+  assert.strictEqual(descriptionIndent(ed.text, 0, 1, 1), "    ");
+});
+
+test("editing a description does not reformat sibling tasks", () => {
+  const ed = open(
+    "- [ ] Parent\n    Notes here.\n    - [ ] Child\n        Child notes.\n"
+  );
+  ed.send({ t: "taskDescription", line: 0, text: "Updated notes." });
+  assert.strictEqual(
+    ed.text,
+    "- [ ] Parent\n    Updated notes.\n    - [ ] Child\n        Child notes.\n"
+  );
+});
+
+test("no-op title, task title, status, and description leave the document unchanged", () => {
+  const text = "# Demo\nA short plan.\n\n- [X] Alpha\n  Keep me.\n";
+  const ed = open(text);
+  ed.send({ t: "title", text: "Demo" });
+  ed.send({ t: "text", line: 3, text: "Alpha" });
+  ed.send({ t: "status", line: 3, status: "done" });
+  ed.send({ t: "taskDescription", line: 3, text: "Keep me." });
+  ed.send({ t: "description", text: "A short plan." });
+  assert.strictEqual(ed.text, text);
+  assert.strictEqual(undoStack.length, 0, "no-ops must not push undo entries");
+});
+
+test("CRLF documents keep CRLF after status, rename, and add", () => {
+  const text = "# Demo\r\n\r\n- [ ] Alpha\r\n    - [ ] child\r\n";
+  const ed = open(text);
+  ed.send({ t: "status", line: 2, status: "done" });
+  ed.send({ t: "text", line: 2, text: "Alpha renamed" });
+  ed.send({ t: "addTask", parent: 2 });
+  assert.ok(ed.text.includes("\r\n"), "CRLF must be preserved");
+  assert.ok(!ed.text.replace(/\r\n/g, "").includes("\n"), "no bare LF rows");
+  assert.strictEqual(
+    ed.text,
+    "# Demo\r\n\r\n- [x] Alpha renamed\r\n    - [ ] child\r\n    - [ ]\r\n"
+  );
+  assert.strictEqual(parsePlan(ed.text).tasks[2].parent, 2);
+});
+
+/* ---------- parent progress (display-only) ---------- */
+
+test("directChildProgress is null when a task has no children", () => {
+  const plan = parsePlan("- [ ] Leaf\n- [x] Other\n");
+  assert.strictEqual(directChildProgress(plan, 0), null);
+  assert.strictEqual(directChildProgress(plan, 1), null);
+});
+
+test("directChildProgress reports 0/3 when no direct children are done", () => {
+  const plan = parsePlan(
+    "- [ ] Parent\n  - [ ] a\n  - [-] b\n  - [ ] c\n"
+  );
+  assert.deepStrictEqual(directChildProgress(plan, 0), { done: 0, total: 3 });
+});
+
+test("directChildProgress reports 2/5 for mixed direct children", () => {
+  const plan = parsePlan(
+    "- [ ] Parent\n  - [x] a\n  - [ ] b\n  - [X] c\n  - [-] d\n  - [ ] e\n"
+  );
+  assert.deepStrictEqual(directChildProgress(plan, 0), { done: 2, total: 5 });
+});
+
+test("directChildProgress reports all children completed", () => {
+  const plan = parsePlan(
+    "- [-] Parent\n  - [x] a\n  - [X] b\n  - [x] c\n"
+  );
+  assert.deepStrictEqual(directChildProgress(plan, 0), { done: 3, total: 3 });
+});
+
+test("directChildProgress ignores nested descendants", () => {
+  const plan = parsePlan(
+    `- [ ] Parent
+  - [x] Child
+    - [ ] Grandchild todo
+    - [x] Grandchild done
+  - [ ] Other
+`
+  );
+  assert.deepStrictEqual(directChildProgress(plan, 0), { done: 1, total: 2 });
+  assert.deepStrictEqual(directChildProgress(plan, 1), { done: 1, total: 2 });
+});
+
+test("changing a child status updates directChildProgress without rewriting the parent", () => {
+  const text =
+    "- [ ] Parent\n  - [ ] a\n  - [x] b\n  - [ ] c\n";
+  const ed = open(text);
+  assert.deepStrictEqual(directChildProgress(parsePlan(ed.text), 0), {
+    done: 1,
+    total: 3,
+  });
+  ed.send({ t: "status", line: 1, status: "done" });
+  assert.deepStrictEqual(directChildProgress(parsePlan(ed.text), 0), {
+    done: 2,
+    total: 3,
+  });
+  assert.strictEqual(
+    ed.text,
+    "- [ ] Parent\n  - [x] a\n  - [x] b\n  - [ ] c\n",
+    "only the child checkbox changes; parent status and structure stay put"
+  );
+});
+
+test("parent progress UI is display-only and refreshes with status changes", () => {
+  const fs = require("node:fs");
+  const ui = fs.readFileSync(`${__dirname}/../media/planEditor.js`, "utf8");
+  const css = fs.readFileSync(`${__dirname}/../media/planEditor.css`, "utf8");
+  assert.match(ui, /doneChildren/);
+  assert.match(ui, /row-progress/);
+  assert.match(ui, /\$\{v\.doneChildren\}\/\$\{v\.children\}/);
+  assert.match(ui, /function setStatus[\s\S]*render\(\)/);
+  assert.match(css, /\.row-progress\s*\{[^}]*pointer-events:\s*none/s);
+  assert.doesNotMatch(ui, /auto.*parent|rollup.*status|markParent/i);
 });

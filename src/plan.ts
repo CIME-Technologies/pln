@@ -34,7 +34,7 @@ export interface Plan {
 
 export const TASK = /^[ \t]*[-*+][ \t]+\[([ xX-])\](?:[ \t]+(.*))?$/;
 const TITLE = /^#[ \t]+(.+)$/;
-/** Canonical indent written for each nesting level. */
+/** Canonical indent written for each nesting level when no local style exists. */
 export const INDENT = "  ";
 
 export const TOKEN: Record<Status, string> = { todo: " ", in_progress: "-", done: "x" };
@@ -43,7 +43,7 @@ const statusOf = (token: string): Status =>
   token === "-" ? "in_progress" : token === " " ? "todo" : "done";
 
 /** Leading whitespace width; `tab` counts as 2. */
-function indentOf(raw: string): number {
+export function indentOf(raw: string): number {
   let n = 0;
   for (const ch of raw) {
     if (ch === " ") {
@@ -55,6 +55,17 @@ function indentOf(raw: string): number {
     }
   }
   return n;
+}
+
+/** Leading whitespace of a line. */
+export function leadOf(raw: string): string {
+  return (/^[ \t]*/.exec(raw) || [""])[0];
+}
+
+/** Task bullet marker (`-`, `*`, or `+`); defaults to `-`. */
+export function bulletOf(raw: string): string {
+  const m = /^[ \t]*([-*+])/.exec(raw);
+  return m ? m[1] : "-";
 }
 
 /** Strip leading whitespace up to `width` (`tab` counts as 2). */
@@ -73,6 +84,85 @@ function stripIndent(raw: string, width: number): string {
     }
   }
   return raw.slice(i);
+}
+
+/**
+ * Checkbox token to write for `status`.
+ * Preserves an existing uppercase `X` when staying on or setting Done.
+ */
+export function statusToken(status: Status, current: string): string {
+  if (status === "done") {
+    return current === "X" ? "X" : TOKEN.done;
+  }
+  return TOKEN[status];
+}
+
+/** Indent unit inferred from an existing parent→child pair, else {@link INDENT}. */
+export function detectIndentUnit(text: string, plan?: Plan): string {
+  const lines = text.split(/\r?\n/);
+  const parsed = plan ?? parsePlan(text);
+  for (const task of parsed.tasks) {
+    if (task.parent === null) {
+      continue;
+    }
+    const parentLead = leadOf(lines[task.parent] ?? "");
+    const childLead = leadOf(lines[task.line] ?? "");
+    if (childLead.startsWith(parentLead) && childLead.length > parentLead.length) {
+      return childLead.slice(parentLead.length);
+    }
+  }
+  return INDENT;
+}
+
+/**
+ * Prefix (indent + bullet + empty checkbox) for a new task under `parentLine`.
+ * Prefers sibling style; otherwise parent bullet + inferred indent unit.
+ */
+export function taskInsertPrefix(text: string, parentLine: number | null): string {
+  const lines = text.split(/\r?\n/);
+  const plan = parsePlan(text);
+
+  if (parentLine === null) {
+    const roots = plan.tasks.filter((t) => t.parent === null);
+    const sample = roots.length ? lines[roots[roots.length - 1].line] ?? "" : "";
+    return `${bulletOf(sample)} [ ]`;
+  }
+
+  const parent = plan.tasks.find((t) => t.line === parentLine);
+  if (!parent) {
+    return `${INDENT}- [ ]`;
+  }
+
+  const siblings = plan.tasks.filter((t) => t.parent === parentLine);
+  if (siblings.length) {
+    const sample = lines[siblings[siblings.length - 1].line] ?? "";
+    return `${leadOf(sample)}${bulletOf(sample)} [ ]`;
+  }
+
+  const parentRaw = lines[parentLine] ?? "";
+  return `${leadOf(parentRaw)}${detectIndentUnit(text, plan)}${bulletOf(parentRaw)} [ ]`;
+}
+
+/**
+ * Indent prefix for a task description body.
+ * Reuses the first non-empty line of an existing block when present.
+ */
+export function descriptionIndent(
+  text: string,
+  taskLine: number,
+  descriptionLine: number,
+  descriptionEnd: number
+): string {
+  const lines = text.split(/\r?\n/);
+  if (descriptionLine >= 0 && descriptionEnd >= descriptionLine) {
+    for (let i = descriptionLine; i <= descriptionEnd; i++) {
+      const raw = lines[i] ?? "";
+      if (raw.trim()) {
+        return leadOf(raw);
+      }
+    }
+  }
+  return leadOf(lines[taskLine] ?? "") + detectIndentUnit(text);
 }
 
 /**
@@ -249,4 +339,22 @@ export function depths(plan: Plan): Map<number, number> {
     depth.set(task.line, task.parent === null ? 0 : (depth.get(task.parent) ?? 0) + 1);
   }
   return depth;
+}
+
+/**
+ * Direct-child progress for a parent task: `{ done, total }`, or `null` if none.
+ * Counts only immediate children (not deeper descendants). Display-only — never written to the file.
+ */
+export function directChildProgress(
+  plan: Plan,
+  line: number
+): { done: number; total: number } | null {
+  const children = plan.tasks.filter((t) => t.parent === line);
+  if (!children.length) {
+    return null;
+  }
+  return {
+    done: children.filter((t) => t.status === "done").length,
+    total: children.length,
+  };
 }

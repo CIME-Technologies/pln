@@ -252,10 +252,11 @@
   /* ---------- render ---------- */
 
   /**
-   * Compute depth, child count, and collapse key for each task.
+   * Compute depth, child counts, and collapse key for each task.
    * Keys use the title path so collapse survives line shifts.
-   * @param {Array<{line: number, title: string, parent: number|null}>} tasks
-   * @returns {Map<number, {depth: number, key: string, children: number, collapsed?: boolean}>}
+   * `doneChildren` counts direct children with status done (not deeper descendants).
+   * @param {Array<{line: number, title: string, status: string, parent: number|null}>} tasks
+   * @returns {Map<number, {depth: number, key: string, children: number, doneChildren: number, collapsed?: boolean}>}
    */
   function layout(tasks) {
     const view = new Map();
@@ -271,8 +272,16 @@
       }
       if (parent) {
         parent.children += 1;
+        if (task.status === "done") {
+          parent.doneChildren += 1;
+        }
       }
-      view.set(task.line, { depth: parent ? parent.depth + 1 : 0, key, children: 0 });
+      view.set(task.line, {
+        depth: parent ? parent.depth + 1 : 0,
+        key,
+        children: 0,
+        doneChildren: 0,
+      });
     }
 
     for (const v of view.values()) {
@@ -380,6 +389,7 @@
             depth: Math.max(0, v.depth - base - 1),
             key: v.key,
             children: v.children,
+            doneChildren: v.doneChildren,
             collapsed: false,
           })
         );
@@ -414,8 +424,8 @@
     `<span class="chip"><span class="swatch ${status}"></span><b>${count}</b> ${LABEL[status]}</span>`;
 
   /**
-   * @param {{line: number, title: string, status: string}} task
-   * @param {{depth: number, key: string, children: number, collapsed?: boolean}} v
+   * @param {{line: number, title: string, status: string, parent: number|null}} task
+   * @param {{depth: number, key: string, children: number, doneChildren: number, collapsed?: boolean}} v
    * @returns {HTMLLIElement}
    */
   function renderRow(task, v) {
@@ -446,10 +456,26 @@
       setStatus(task, ORDER[(ORDER.indexOf(task.status) + 1) % ORDER.length])
     );
 
+    const main = document.createElement("div");
+    main.className = "row-main";
+
     const title = document.createElement("span");
     title.className = "row-title" + (task.title ? "" : " placeholder");
     title.textContent = task.title || "Untitled";
     title.addEventListener("click", () => editTask(row, task));
+    main.appendChild(title);
+
+    if (v.children > 0) {
+      const progress = document.createElement("span");
+      progress.className = "row-progress";
+      progress.textContent = `${v.doneChildren}/${v.children}`;
+      progress.title = `${v.doneChildren} of ${v.children} subtasks done`;
+      progress.setAttribute(
+        "aria-label",
+        `${v.doneChildren} of ${v.children} subtasks done`
+      );
+      main.appendChild(progress);
+    }
 
     const add = iconButton(PLUS, "Add subtask", () => {
       collapsed.delete(v.key);
@@ -490,7 +516,7 @@
       ])
     );
 
-    row.append(twisty, status, title, add, more);
+    row.append(twisty, status, main, add, more);
     return row;
   }
 
@@ -665,8 +691,9 @@
    * @param {{line: number, title: string}} task
    */
   function editTask(row, task) {
-    edit(row.querySelector(".row-title"), task.title, (value) => {
-      if (value === task.title) {
+    const label = row.querySelector(".row-title");
+    edit(label, task.title, (value) => {
+      if (value === task.title || value === task.title.trim()) {
         return false;
       }
       task.title = value;

@@ -474,8 +474,16 @@ button {
   color: var(--done);
 }
 
-.row-title {
+.row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 1;
+  min-width: 0;
+}
+
+.row-title {
+  flex: 0 1 auto;
   min-width: 0;
   color: var(--text);
   white-space: nowrap;
@@ -489,6 +497,21 @@ button {
 }
 
 .row-title.placeholder {
+  color: var(--text-4);
+}
+
+/* Direct-child progress (display-only; not written to the file). */
+.row-progress {
+  flex: 0 0 auto;
+  color: var(--text-4);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  user-select: none;
+  pointer-events: none;
+}
+
+.row.done .row-progress {
   color: var(--text-4);
 }
 
