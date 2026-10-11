@@ -84,6 +84,7 @@
     "check": "tsc --noEmit",
     "git": "git add . && printf 'Commit message [update]: ' && read msg && git commit -m \"${msg:-update}\" && git push",
     "package": "npm run compile && mkdir -p dist && npx @vscode/vsce package --out \"./dist/${npm_package_name}-${npm_package_version}.vsix\" && cursor --install-extension \"./dist/${npm_package_name}-${npm_package_version}.vsix\" --force",
+    "publish:ovsx": "npm run package && dotenv -e .env -- npx ovsx publish ./dist/${npm_package_name}-${npm_package_version}.vsix -p \"$OVSX_PAT\"",
     "test": "npm run compile && node --test test/plan.test.js"
   },
   "devDependencies": {
