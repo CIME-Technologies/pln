@@ -48,29 +48,34 @@
     ],
     "commands": [
       {
-        "command": "pln.view.enterRaw",
-        "title": "Markdown",
+        "command": "pln.openMarkdown",
+        "title": "Open as Markdown",
         "icon": "$(code)"
       },
       {
-        "command": "pln.view.exitRaw",
-        "title": "Exit Markdown",
+        "command": "pln.openPlan",
+        "title": "Open as Plan",
         "icon": "$(open-preview)"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "pln.view.enterRaw",
-          "when": "activeCustomEditorId == 'pln.planEditor' && !pln.rawMode",
+          "command": "pln.openMarkdown",
+          "when": "activeCustomEditorId == 'pln.planEditor'",
           "group": "navigation"
         },
         {
-          "command": "pln.view.exitRaw",
-          "when": "activeCustomEditorId == 'pln.planEditor' && pln.rawMode",
+          "command": "pln.openPlan",
+          "when": "resourceExtname == '.pln' && activeCustomEditorId != 'pln.planEditor'",
           "group": "navigation"
         }
       ]
+    },
+    "configurationDefaults": {
+      "workbench.editorAssociations": {
+        "{git,gitlens}:/**/*.pln": "default"
+      }
     }
   },
   "scripts": {

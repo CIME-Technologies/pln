@@ -17,10 +17,12 @@ import {
 export type { Plan, Status, Task } from "./plan";
 export { blockEnd, parsePlan, taskMarkdown } from "./plan";
 
+const VIEW_PLAN = "pln.planEditor";
+const VIEW_TEXT = "default";
+
 /** Webview → host. Unknown `t` / invalid edits → `edit` returns false → resync. */
 type WebviewToHost =
   | { t: "ready" }
-  | { t: "viewMode"; mode: "raw" | "preview" }
   | { t: "copyTask"; line: number }
   | { t: "undo" }
   | { t: "redo" }
@@ -30,8 +32,7 @@ type WebviewToHost =
   | { t: "addTask"; parent: number | null }
   | { t: "status"; line: number; status: Status }
   | { t: "text"; line: number; text: string }
-  | { t: "taskDescription"; line: number; text: string }
-  | { t: "source"; text: string };
+  | { t: "taskDescription"; line: number; text: string };
 
 /**
  * Document range covering lines `[from, to]`, including the attaching newline.
@@ -45,77 +46,49 @@ function lineSpan(doc: vscode.TextDocument, from: number, to: number): vscode.Ra
   return new vscode.Range(start, doc.lineAt(to).range.end);
 }
 
-/** Active plan editor panels, keyed by document URI. */
-const panels = new Map<string, vscode.WebviewPanel>();
-
-/** Last known raw-mode flag per document (for title-bar toggled state). */
-const rawModeByDoc = new Map<string, boolean>();
+/** Active plan editor panels, keyed by document URI string. */
+const panels = new Map<string, { panel: vscode.WebviewPanel; uri: vscode.Uri }>();
 
 /** Last plan panel that reported active (title-bar clicks clear `panel.active`). */
 let lastActivePanel: vscode.WebviewPanel | undefined;
 
-function setRawContext(docKey: string, raw: boolean): void {
-  rawModeByDoc.set(docKey, raw);
-  void vscode.commands.executeCommand("setContext", "pln.rawMode", raw);
+function isPlnUri(uri: vscode.Uri): boolean {
+  return uri.path.toLowerCase().endsWith(".pln");
 }
 
-function panelDocKey(panel: vscode.WebviewPanel): string | undefined {
-  for (const [key, p] of panels) {
-    if (p === panel) {
-      return key;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Resolve the plan webview to target for title-bar Enter/Exit Raw.
- * Title-bar clicks often clear `panel.active` before the command runs, so
- * prefer the active custom editor tab, then an active panel, then the
- * last-active / sole open panel.
- */
-function activePlanPanel(): vscode.WebviewPanel | undefined {
+/** URI of the .pln file targeted by title-bar Open Markdown / Open Plan. */
+function activePlnUri(): vscode.Uri | undefined {
   const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
   const input = tab?.input;
-  if (input instanceof vscode.TabInputCustom && input.viewType === "pln.planEditor") {
-    const panel = panels.get(input.uri.toString());
-    if (panel) {
-      lastActivePanel = panel;
-      return panel;
-    }
+  if (input instanceof vscode.TabInputCustom && input.viewType === VIEW_PLAN) {
+    return input.uri;
   }
-
-  for (const panel of panels.values()) {
-    if (panel.active) {
-      lastActivePanel = panel;
-      return panel;
-    }
+  if (input instanceof vscode.TabInputText && isPlnUri(input.uri)) {
+    return input.uri;
   }
-
+  const ed = vscode.window.activeTextEditor;
+  if (ed && (ed.document.languageId === "pln" || isPlnUri(ed.document.uri))) {
+    return ed.document.uri;
+  }
   if (lastActivePanel) {
-    for (const panel of panels.values()) {
-      if (panel === lastActivePanel) {
-        return panel;
+    for (const entry of panels.values()) {
+      if (entry.panel === lastActivePanel) {
+        return entry.uri;
       }
     }
   }
-
   if (panels.size === 1) {
-    return panels.values().next().value;
+    return panels.values().next().value?.uri;
   }
   return undefined;
 }
 
-function setPlanView(mode: "preview" | "raw"): void {
-  const panel = activePlanPanel();
-  if (!panel) {
+async function openPlnWith(viewType: string): Promise<void> {
+  const uri = activePlnUri();
+  if (!uri) {
     return;
   }
-  const key = panelDocKey(panel);
-  if (key) {
-    setRawContext(key, mode === "raw");
-  }
-  void panel.webview.postMessage({ t: "setView", mode });
+  await vscode.commands.executeCommand("vscode.openWith", uri, viewType);
 }
 
 /** Custom text editor that syncs a `.pln` {@link Plan} with the webview UI. */
@@ -127,16 +100,11 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     const docKey = doc.uri.toString();
     panel.webview.options = { enableScripts: true, localResourceRoots: [media] };
     panel.webview.html = page(panel.webview, media);
-    panels.set(docKey, panel);
+    panels.set(docKey, { panel, uri: doc.uri });
     lastActivePanel = panel;
-    setRawContext(docKey, rawModeByDoc.get(docKey) ?? false);
 
     const send = () => {
-      const text = doc.getText();
-      panel.webview.postMessage({
-        ...parsePlan(text),
-        source: text,
-      });
+      panel.webview.postMessage(parsePlan(doc.getText()));
     };
 
     let timer: ReturnType<typeof setTimeout>;
@@ -150,7 +118,6 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
     const viewSub = panel.onDidChangeViewState((e) => {
       if (e.webviewPanel.active) {
         lastActivePanel = e.webviewPanel;
-        setRawContext(docKey, rawModeByDoc.get(docKey) ?? false);
       }
     });
 
@@ -162,16 +129,9 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
       if (lastActivePanel === panel) {
         lastActivePanel = undefined;
       }
-      if (![...panels.keys()].some((key) => rawModeByDoc.get(key))) {
-        void vscode.commands.executeCommand("setContext", "pln.rawMode", false);
-      }
     });
     // Rejected edits produce no change event — push the current plan anyway.
     panel.webview.onDidReceiveMessage(async (m: WebviewToHost) => {
-      if (m.t === "viewMode") {
-        setRawContext(docKey, m.mode === "raw");
-        return;
-      }
       if (m.t === "copyTask") {
         const md = taskMarkdown(doc.getText(), m.line);
         if (md !== null) {
@@ -322,20 +282,6 @@ class PlanEditor implements vscode.CustomTextEditorProvider {
         }
         break;
       }
-      case "source": {
-        if (typeof m.text !== "string") {
-          return false;
-        }
-        const end = doc.lineCount > 0 ? at(doc.lineCount - 1) : null;
-        const range = end
-          ? new vscode.Range(0, 0, end.lineNumber, end.text.length)
-          : new vscode.Range(0, 0, 0, 0);
-        if (doc.getText() === m.text) {
-          return false;
-        }
-        edit.replace(doc.uri, range, m.text);
-        break;
-      }
       default:
         return false;
     }
@@ -427,21 +373,16 @@ function page(webview: vscode.Webview, media: vscode.Uri): string {
     </div>
   </div>
 
-  <textarea id="raw" class="raw hidden" aria-label="Raw Markdown" spellcheck="false"></textarea>
-
   <script nonce="${nonce}" src="${uri("planEditor.js")}"></script>
 </body>
 </html>`;
 }
 
-/** Register the Plan custom editor and title-bar Enter/Exit Raw actions. */
+/** Register the Plan custom editor and title-bar Open Markdown / Open Plan actions. */
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(
-      "pln.planEditor",
-      new PlanEditor(context.extensionUri)
-    ),
-    vscode.commands.registerCommand("pln.view.enterRaw", () => setPlanView("raw")),
-    vscode.commands.registerCommand("pln.view.exitRaw", () => setPlanView("preview"))
+    vscode.window.registerCustomEditorProvider(VIEW_PLAN, new PlanEditor(context.extensionUri)),
+    vscode.commands.registerCommand("pln.openMarkdown", () => openPlnWith(VIEW_TEXT)),
+    vscode.commands.registerCommand("pln.openPlan", () => openPlnWith(VIEW_PLAN))
   );
 }

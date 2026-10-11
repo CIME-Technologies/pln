@@ -7,7 +7,6 @@
   const $ = (id) => document.getElementById(id);
   const el = {
     crumb: $("crumb"),
-    raw: $("raw"),
     title: $("title"),
     description: $("description"),
     meta: $("meta"),
@@ -28,13 +27,10 @@
   const collapsed = new Set(saved.collapsed || []);
   /** Focused task line for the detail view, or `null` at the plan root. */
   let focusLine = typeof saved.focusLine === "number" ? saved.focusLine : null;
-  let rawMode = !!saved.rawMode;
   const post = (m) => vscode.postMessage(m);
-  const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine, rawMode });
+  const persist = () => vscode.setState({ collapsed: [...collapsed], focusLine });
 
   let plan = { title: "Plan", description: "", tasks: [] };
-  /** Full `.pln` source text for the Markdown. */
-  let source = "";
   let menu = null;
   /**
    * After the next document push, start editing this task.
@@ -285,56 +281,9 @@
     return view;
   }
 
-  /** Apply host payload: plan fields + optional `source` for Markdown. */
+  /** Apply host plan payload. */
   function applyPayload(data) {
-    source = typeof data.source === "string" ? data.source : source;
-    const next = { ...data };
-    delete next.source;
-    plan = next;
-  }
-
-  /** Debounced write-back while editing Raw Markdown. */
-  let rawTimer = 0;
-  let rawDirty = false;
-
-  function flushRaw() {
-    if (rawTimer) {
-      clearTimeout(rawTimer);
-      rawTimer = 0;
-    }
-    if (!rawDirty) {
-      return;
-    }
-    const text = el.raw.value;
-    rawDirty = false;
-    source = text;
-    post({ t: "source", text });
-  }
-
-  /** Sync the raw textarea from `source` without clobbering in-progress typing. */
-  function syncRawTextarea() {
-    if (!rawDirty && el.raw.value !== source) {
-      el.raw.value = source;
-    }
-  }
-
-  function setRawMode(on) {
-    const next = !!on;
-    if (rawMode && !next) {
-      flushRaw();
-    }
-    const changed = rawMode !== next;
-    rawMode = next;
-    document.body.classList.toggle("raw-mode", rawMode);
-    el.raw.classList.toggle("hidden", !rawMode);
-    persist();
-    if (changed) {
-      post({ t: "viewMode", mode: rawMode ? "raw" : "preview" });
-    }
-    if (rawMode) {
-      closeMenu();
-      syncRawTextarea();
-    }
+    plan = data;
   }
 
   /** Paint hero title/description for root or detail (caller picks the values). */
@@ -354,13 +303,6 @@
   function render() {
     closeMenu();
     reconcileNav();
-    setRawMode(rawMode);
-
-    if (rawMode) {
-      syncRawTextarea();
-      shown = JSON.stringify({ plan, focusLine, source, rawMode });
-      return;
-    }
 
     const focused = focusedTask();
     const inDetail = !!focused;
@@ -460,7 +402,7 @@
       textNodes[textNodes.length - 1].textContent = addText;
     }
 
-    shown = JSON.stringify({ plan, focusLine, source, rawMode });
+    shown = JSON.stringify({ plan, focusLine });
   }
 
   /**
@@ -849,16 +791,6 @@
 
   /* ---------- wiring ---------- */
 
-  el.raw.addEventListener("input", () => {
-    rawDirty = true;
-    source = el.raw.value;
-    if (rawTimer) {
-      clearTimeout(rawTimer);
-    }
-    rawTimer = setTimeout(flushRaw, 200);
-  });
-  el.raw.addEventListener("blur", flushRaw);
-
   el.title.addEventListener("click", editTitle);
   el.description.addEventListener("click", (e) => {
     if (e.target && e.target.closest && e.target.closest("a")) {
@@ -876,11 +808,6 @@
     if (e.key === "Escape") {
       if (menu) {
         closeMenu();
-        return;
-      }
-      if (rawMode) {
-        setRawMode(false);
-        render();
         return;
       }
       if (!activeInput && focusLine !== null) {
@@ -906,28 +833,14 @@
 
   window.addEventListener("message", (e) => {
     const data = e.data;
-    if (data && data.t === "setView") {
-      setRawMode(data.mode === "raw");
-      render();
-      if (rawMode) {
-        el.raw.focus();
-      }
+    if (!data || data.t) {
       return;
     }
     if (activeInput) {
       queuedPlan = data;
       return;
     }
-    const fingerprint = JSON.stringify({
-      plan: (() => {
-        const p = { ...data };
-        delete p.source;
-        return p;
-      })(),
-      focusLine,
-      source: data.source,
-      rawMode,
-    });
+    const fingerprint = JSON.stringify({ plan: data, focusLine });
     if (fingerprint === shown) {
       return;
     }
@@ -938,7 +851,5 @@
     focusAfterRender = null;
   });
 
-  setRawMode(rawMode);
-  post({ t: "viewMode", mode: rawMode ? "raw" : "preview" });
   post({ t: "ready" });
 })();

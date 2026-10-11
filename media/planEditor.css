@@ -111,43 +111,6 @@ button {
   min-height: 28px;
 }
 
-.raw {
-  box-sizing: border-box;
-  display: none;
-  width: 100%;
-  min-height: calc(100vh - 48px);
-  margin: 0;
-  padding: 16px 24px 32px;
-  border: none;
-  resize: none;
-  overflow: auto;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  letter-spacing: inherit;
-  white-space: pre;
-  tab-size: 2;
-}
-
-.raw:focus,
-.raw:focus-visible {
-  outline: none;
-}
-
-body.raw-mode .editor {
-  display: none;
-}
-
-body.raw-mode .crumb {
-  display: none;
-}
-
-body.raw-mode .raw {
-  display: block;
-}
-
 .crumb-list {
   display: flex;
   align-items: center;

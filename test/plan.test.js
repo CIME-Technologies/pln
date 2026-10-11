@@ -41,11 +41,23 @@ class TabInputCustom {
   }
 }
 
+class TabInputText {
+  constructor(uri) {
+    this.uri = uri;
+  }
+}
+
+/** Calls to `vscode.openWith` from title-bar commands. */
+let openWithCalls = [];
+
 class Doc {
   constructor(text, name = "plan") {
     this.text = text;
     this.fileName = `/tmp/${name}.pln`;
-    this.uri = { toString: () => `file:///tmp/${name}.pln` };
+    this.uri = {
+      path: `/tmp/${name}.pln`,
+      toString: () => `file:///tmp/${name}.pln`,
+    };
   }
   get lines() {
     return this.text.split("\n");
@@ -88,7 +100,12 @@ const vscode = {
   Range,
   WorkspaceEdit,
   TabInputCustom,
-  Uri: { file: (p) => ({ p }), joinPath: (u, ...s) => ({ p: [u.p, ...s].join("/") }) },
+  TabInputText,
+  Uri: {
+    file: (p) => ({ p, path: p, toString: () => `file://${p}` }),
+    joinPath: (u, ...s) => ({ p: [u.p, ...s].join("/"), path: [u.p, ...s].join("/") }),
+    parse: (s) => ({ p: s, path: s, toString: () => s }),
+  },
   workspace: {
     applyEdit: async (edit) => {
       undoStack.push(activeDoc.text);
@@ -107,8 +124,12 @@ const vscode = {
       registeredCommands[id] = fn;
       return { dispose() {} };
     },
-    executeCommand: async (cmd) => {
+    executeCommand: async (cmd, ...args) => {
       if (cmd === "setContext") {
+        return;
+      }
+      if (cmd === "vscode.openWith") {
+        openWithCalls.push(args);
         return;
       }
       if (cmd === "undo") {
@@ -144,6 +165,9 @@ const vscode = {
         return { activeTab };
       },
     },
+    get activeTextEditor() {
+      return undefined;
+    },
   },
   env: {
     clipboard: {
@@ -171,6 +195,7 @@ activate({ extensionUri: { p: "/ext" }, subscriptions: [] });
 function open(text, name) {
   undoStack = [];
   redoStack = [];
+  openWithCalls = [];
   activeDoc = new Doc(text, name);
   const sent = [];
   const panel = {
@@ -419,11 +444,15 @@ test("the webview has a persistent breadcrumb and a View details menu action", (
   assert.match(ui, /navigateTo\(task\.line\)/);
 });
 
-test("the host sends raw source and the webview keeps an editable raw surface", () => {
+test("the webview has no raw textarea; Markdown opens the native text editor", () => {
   const ed = open(SAMPLE);
-  assert.strictEqual(ed.sent[0].source, SAMPLE);
-  assert.match(ed.panel.webview.html, /<textarea[^>]*id="raw"/);
-  assert.doesNotMatch(ed.panel.webview.html, /view-switch|view-preview|view-raw/);
+  assert.strictEqual(ed.sent[0].source, undefined);
+  assert.doesNotMatch(ed.panel.webview.html, /id="raw"|raw-mode/);
+  const fs = require("node:fs");
+  const pkg = fs.readFileSync(`${__dirname}/../package.json`, "utf8");
+  assert.match(pkg, /pln\.openMarkdown/);
+  assert.match(pkg, /workbench\.editorAssociations/);
+  assert.match(pkg, /\{git,gitlens\}:\/\*\*\/\*\.pln/);
 });
 
 test("hero title and description edit with auto-growing textareas", () => {
@@ -435,15 +464,6 @@ test("hero title and description edit with auto-growing textareas", () => {
   assert.match(ui, /editArea\(el\.title/);
   assert.match(css, /\.inline-title\s*\{/);
   assert.match(css, /\.inline-area\s*\{[^}]*min-height:\s*6\.2em/s);
-});
-
-test("raw source edits replace the whole document", () => {
-  const ed = open(SAMPLE);
-  const next = "# Renamed\n\n- [ ] Solo\n";
-  ed.send({ t: "source", text: next });
-  assert.strictEqual(ed.text, next);
-  assert.strictEqual(parsePlan(ed.text).title, "Renamed");
-  assert.strictEqual(parsePlan(ed.text).tasks.length, 1);
 });
 
 /* ---------- opening ---------- */
@@ -923,13 +943,18 @@ test("pushed plan includes task descriptions", () => {
   assert.strictEqual(ed.sent[0].tasks[0].description, "Details.");
 });
 
-test("title-bar Enter/Exit Raw reaches a deactivated plan panel", () => {
-  const ed = open(SAMPLE, "raw-title");
+test("title-bar Open as Markdown / Open as Plan call vscode.openWith", async () => {
+  const ed = open(SAMPLE, "switch-editor");
   ed.panel.active = false; // title-bar click clears active before the command runs
-  ed.sent.length = 0;
-  registeredCommands["pln.view.enterRaw"]();
-  assert.deepStrictEqual(ed.sent, [{ t: "setView", mode: "raw" }]);
-  ed.sent.length = 0;
-  registeredCommands["pln.view.exitRaw"]();
-  assert.deepStrictEqual(ed.sent, [{ t: "setView", mode: "preview" }]);
+  openWithCalls = [];
+  await registeredCommands["pln.openMarkdown"]();
+  assert.strictEqual(openWithCalls.length, 1);
+  assert.strictEqual(openWithCalls[0][1], "default");
+  assert.strictEqual(openWithCalls[0][0].toString(), activeDoc.uri.toString());
+
+  activeTab = { input: new TabInputText(activeDoc.uri) };
+  openWithCalls = [];
+  await registeredCommands["pln.openPlan"]();
+  assert.strictEqual(openWithCalls.length, 1);
+  assert.strictEqual(openWithCalls[0][1], "pln.planEditor");
 });

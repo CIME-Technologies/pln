@@ -35,8 +35,11 @@ Search for **Plan: .pln Editor** in the VS Code Extensions view, or install it f
 ## Usage
 
 Create or open a file ending in `.pln` and it opens in the plan editor. Use the
-title-bar **Markdown** / **Exit Markdown** actions to toggle the raw source, or
-**Reopen Editor With… → Text Editor** for the plain text editor.
+title-bar **Open as Markdown** action for the native text editor (full selection,
+copy/paste, Find, and undo), or **Open as Plan** to return to the visual editor.
+**Reopen Editor With…** also switches editors. Git/SCM diffs default to the
+native text editor via `workbench.editorAssociations` for `git:` / `gitlens:`
+`.pln` URIs.
 
 - **Add a task** with the *Add task* button at the bottom. The name is
   selected so you can type over it right away.
