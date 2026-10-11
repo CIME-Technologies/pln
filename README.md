@@ -34,8 +34,9 @@ Search for **Plan: .pln Editor** in the VS Code Extensions view, or install it f
 
 ## Usage
 
-Create or open a file ending in `.pln` and it opens in the plan editor. To see
-the underlying markdown at any point, use **Reopen Editor With… → Text Editor**.
+Create or open a file ending in `.pln` and it opens in the plan editor. Use the
+title-bar **Markdown** / **Exit Markdown** actions to toggle the raw source, or
+**Reopen Editor With… → Text Editor** for the plain text editor.
 
 - **Add a task** with the *Add task* button at the bottom. The name is
   selected so you can type over it right away.
