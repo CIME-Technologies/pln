@@ -96,7 +96,17 @@ async function openPlnWith(viewType: string): Promise<void> {
   if (!uri) {
     return;
   }
-  await vscode.commands.executeCommand("vscode.openWith", uri, viewType);
+  // Replaces the active tab. `vscode.openWith` always opens a second one.
+  // The command landed in VS Code 1.100; older hosts fall back to close + open.
+  try {
+    await vscode.commands.executeCommand("reopenActiveEditorWith", viewType);
+  } catch {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    if (tab) {
+      await vscode.window.tabGroups.close(tab);
+    }
+    await vscode.commands.executeCommand("vscode.openWith", uri, viewType);
+  }
 }
 
 /** Custom text editor that syncs a `.pln` {@link Plan} with the webview UI. */

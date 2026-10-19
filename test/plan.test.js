@@ -47,8 +47,8 @@ class TabInputText {
   }
 }
 
-/** Calls to `vscode.openWith` from title-bar commands. */
-let openWithCalls = [];
+/** Calls to `reopenActiveEditorWith` from title-bar commands. */
+let reopenCalls = [];
 
 class Doc {
   constructor(text, name = "plan") {
@@ -136,9 +136,12 @@ const vscode = {
       if (cmd === "setContext") {
         return;
       }
-      if (cmd === "vscode.openWith") {
-        openWithCalls.push(args);
+      if (cmd === "reopenActiveEditorWith") {
+        reopenCalls.push(args);
         return;
+      }
+      if (cmd === "vscode.openWith") {
+        throw new Error("openWith");
       }
       if (cmd === "undo") {
         if (!undoStack.length) {
@@ -212,7 +215,7 @@ activate({ extensionUri: { p: "/ext" }, subscriptions: [] });
 function open(text, name) {
   undoStack = [];
   redoStack = [];
-  openWithCalls = [];
+  reopenCalls = [];
   activeDoc = new Doc(text, name);
   const sent = [];
   const panel = {
@@ -960,20 +963,17 @@ test("pushed plan includes task descriptions", () => {
   assert.strictEqual(ed.sent[0].tasks[0].description, "Details.");
 });
 
-test("title-bar Open as Markdown / Open as Plan call vscode.openWith", async () => {
+test("title-bar Open as Markdown / Open as Plan reopen the active tab", async () => {
   const ed = open(SAMPLE, "switch-editor");
   ed.panel.active = false; // title-bar click clears active before the command runs
-  openWithCalls = [];
+  reopenCalls = [];
   await registeredCommands["pln.openMarkdown"]();
-  assert.strictEqual(openWithCalls.length, 1);
-  assert.strictEqual(openWithCalls[0][1], "default");
-  assert.strictEqual(openWithCalls[0][0].toString(), activeDoc.uri.toString());
+  assert.deepStrictEqual(reopenCalls, [["default"]]);
 
   activeTab = { input: new TabInputText(activeDoc.uri) };
-  openWithCalls = [];
+  reopenCalls = [];
   await registeredCommands["pln.openPlan"]();
-  assert.strictEqual(openWithCalls.length, 1);
-  assert.strictEqual(openWithCalls[0][1], "pln.planEditor");
+  assert.deepStrictEqual(reopenCalls, [["pln.planEditor"]]);
 });
 
 /* ---------- nesting style / formatting preservation ---------- */

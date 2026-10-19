@@ -1,4 +1,5 @@
 # Issues to be fixed
 
-- [ ] "Open as Markdown" opens a new tab - should be in place
-- [ ] (?) Mark parent tasks as In Progress when subtasks start
+- [x] "Open as Markdown" opens a new tab - should be in place
+- [x] Add icon for pln files (if possible) - should be the same as the todo icon
+- [ ] Allow to reference files, file rows (e.g. in repo) and links

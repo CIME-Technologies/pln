@@ -31,7 +31,11 @@
         ],
         "extensions": [
           ".pln"
-        ]
+        ],
+        "icon": {
+          "light": "./icons/pln-light.svg",
+          "dark": "./icons/pln-dark.svg"
+        }
       }
     ],
     "customEditors": [
